@@ -13,6 +13,15 @@ and this project adheres to [Semantic Versioning][].
 ### Removed
 -->
 
+## [0.1.1][] - 2026-02-11
+
+### Added
+
+* `Options.MinMatchLength` and `CompressOptions.MinMatchLength` for support
+  back-ref length 2..17 (MinMatch2) in addition to default 3..18
+
+[0.1.1]: https://github.com/WoozyMasta/lzss/compare/v0.1.0...v0.1.1
+
 ## [0.1.0][] - 2026-02-04
 
 ### Added
