@@ -11,9 +11,15 @@ func Decompress(src []byte, outLen int, opts *Options) ([]byte, error) {
 	if opts == nil {
 		opts = DefaultOptions()
 	}
+	minMatch := opts.MinMatchLength
+	if minMatch == 0 {
+		minMatch = MinMatchDefault
+	}
+
 	if len(src) < 4 {
 		return nil, ErrInputTooShort
 	}
+
 	crcPos := len(src) - 4
 	data := src[:crcPos]
 	readCrc := binary.LittleEndian.Uint32(src[crcPos:])
@@ -62,13 +68,13 @@ func Decompress(src []byte, outLen int, opts *Options) ([]byte, error) {
 					break
 				}
 
-				// Pointer: LE 16-bit = [offset_lo8, (offset_hi4<<4)|(length-3)]; offset is backward from pos.
+				// Pointer: LE 16-bit = [offset_lo8, (offset_hi4<<4)|(length-minMatch)]; offset is backward from pos.
 				pointer := binary.LittleEndian.Uint16(data[inPos : inPos+2])
 				inPos += 2
 				low8 := int(pointer & 0xFF)
 				hi4 := int((pointer & 0xF000) >> 12)
 				offset := low8 + (hi4 << 8)
-				length := int((pointer&0x0F00)>>8) + 3
+				length := int((pointer&0x0F00)>>8) + minMatch
 
 				rpos := pos - offset // source start in output buffer
 				need := length       // bytes to copy (may be capped by outLen later)

@@ -129,9 +129,45 @@ func TestLiteralsOnlyCompress(t *testing.T) {
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+func TestRoundTripMinMatch2(t *testing.T) {
+	// Data that yields 2-byte back-refs: "abab..." so at position 2 we match "ab" at 0 (min match 2).
+	input := bytes.Repeat([]byte("ab"), 64)
+	copts := &CompressOptions{
+		Checksum:       ChecksumUnsigned,
+		SearchLimit:    128,
+		MinMatchLength: MinMatch2,
 	}
-	return b
+	enc, err := Compress(input, copts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dopts := &Options{Checksum: ChecksumUnsigned, VerifyChecksum: true, MinMatchLength: MinMatch2}
+	dec, err := Decompress(enc, len(input), dopts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(input, dec) {
+		t.Fatalf("min match 2 round-trip: got %d bytes, want %d", len(dec), len(input))
+	}
+	// Encoded with min match 2 should be smaller than all-literals (back-refs used).
+	if len(enc) >= len(input)+4 {
+		t.Fatalf("expected compression to use back-refs (len(enc)=%d)", len(enc))
+	}
+}
+
+func TestDecompressMinMatch2Option(t *testing.T) {
+	// Compress with min match 2, decompress with explicit MinMatchLength 2 (and zero => default 3).
+	raw := []byte("xyxyxyxy")
+	copts := &CompressOptions{SearchLimit: 8, MinMatchLength: MinMatch2, Checksum: ChecksumUnsigned}
+	enc, err := Compress(raw, copts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec, err := Decompress(enc, len(raw), &Options{MinMatchLength: MinMatch2, VerifyChecksum: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw, dec) {
+		t.Fatalf("got %q", dec)
+	}
 }

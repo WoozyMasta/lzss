@@ -6,8 +6,12 @@ import (
 
 // CompressOptions configures compression (checksum mode and search limit).
 type CompressOptions struct {
-	Checksum    ChecksumMode
-	SearchLimit int // 0 = literals only; otherwise max backward distance for match search (e.g. 64..4096).
+	// Checksum mode: unsigned or signed.
+	Checksum ChecksumMode
+	// 0 = literals only; otherwise max backward distance for match search (e.g. 64..4096).
+	SearchLimit int
+	// MinMatchLength: 3 (default) encodes length 3..18; 2 encodes 2..17. Zero is 3.
+	MinMatchLength int
 }
 
 // DefaultCompressOptions returns options for default compression (unsigned checksum, search limit 2048).
@@ -57,6 +61,10 @@ func Compress(src []byte, opts *CompressOptions) ([]byte, error) {
 	}
 
 	startChunk()
+	minMatch := opts.MinMatchLength
+	if minMatch == 0 {
+		minMatch = MinMatchDefault
+	}
 	limit := opts.SearchLimit
 	if limit <= 0 {
 		limit = 0
@@ -108,18 +116,21 @@ func Compress(src []byte, opts *CompressOptions) ([]byte, error) {
 			}
 		}
 
-		if bestLen >= 3 {
-			// Encode back-reference: LE 16-bit = [offset_lo8, (offset_hi4<<4)|(length-3)]; length 3..18.
-			// Decoder expects: low byte = offset&0xFF, high byte bits 4..7 = offset>>8, bits 0..3 = length-3.
+		if bestLen >= minMatch {
+			// Encode back-reference: LE 16-bit = [offset_lo8, (offset_hi4<<4)|(length-minMatch)]; length minMatch..minMatch+15.
 			offset := bestOff
 			length := bestLen
+			maxEncLen := minMatch + 15
+			if length > maxEncLen {
+				length = maxEncLen
+			}
 			low := offset & 0xFF
 			hi4 := (offset & 0x0F00) << 4
-			pLen := (length - 3) << 8
+			pLen := (length - minMatch) << 8
 			pointer := uint16(hi4 | low | pLen) // #nosec G115
 			out = append(out, byte(pointer&0xFF), byte(pointer>>8))
-			outData = append(outData, src[i:i+bestLen]...)
-			i += bestLen
+			outData = append(outData, src[i:i+length]...)
+			i += length
 		} else {
 			flagByte |= 1 << bitCount
 			out = append(out, src[i])
