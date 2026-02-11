@@ -2,8 +2,7 @@
 
 **Lempel–Ziv–Storer–Szymanski** (LZSS)
 compression and decompression in Go - LZSS:8bit variant.  
-This is **not** the classic Okumura/Apple LZSS (ring-buffer index);
-it implements the **BI-style** variant:
+This is not the classic Okumura/Apple LZSS (ring-buffer index);
 backward offset from current output position,
 8 flag bits per 8 slots, 12-bit offset + 4-bit length,
 4096-byte window, trailing 4-byte checksum.
@@ -67,12 +66,13 @@ default search limit 2048:
 out, err := lzss.Compress(data, nil)
 ```
 
-with options (search limit, checksum mode):
+with options (search limit, checksum mode, encodes length):
 
 ```go
 opts := &lzss.CompressOptions{
-    Checksum:    lzss.ChecksumUnsigned,
-    SearchLimit: 4096,
+    Checksum:       lzss.ChecksumUnsigned,
+    SearchLimit:    4096,
+    MinMatchLength: 3,
 }
 out, err := lzss.Compress(data, opts)
 ```
