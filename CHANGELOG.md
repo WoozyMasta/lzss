@@ -13,6 +13,20 @@ and this project adheres to [Semantic Versioning][].
 ### Removed
 -->
 
+## Unreleased
+
+### Added
+
+* `DecompressBlock(src, outLen, opts)` returns decompressed data
+  and consumed byte count for the first LZSS block in a byte slice.
+* `DecompressFromReader(r, outLen, opts)` decodes exactly one LZSS block
+  from a stream and returns consumed byte count without reading to EOF.
+
+### Changed
+
+* `Decompress(src, outLen, opts)` now validates that the whole input belongs to one block
+  and returns `ErrTrailingData` when extra bytes are present.
+
 ## [0.1.1][] - 2026-02-11
 
 ### Added

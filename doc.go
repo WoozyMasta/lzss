@@ -8,6 +8,8 @@ Sliding window: 4096 bytes; filler 0x20 when offset refers before start of outpu
 Trailing 4-byte checksum: either unsigned (sum of bytes as uint8) or signed (sum as int8).
 
 Use Decompress(src, outLen, opts) with nil for default (unsigned, strict checksum).
+Use DecompressBlock(src, outLen, opts) to decode from the beginning of src and get consumed bytes.
+Use DecompressFromReader(r, outLen, opts) to decode one block from a stream without reading to EOF.
 Use SignedLenientOptions() for formats that use signed checksum and ignore mismatch.
 Set Options.MinMatchLength or CompressOptions.MinMatchLength to MinMatch2 for 2..17 back-ref length.
 
@@ -19,6 +21,14 @@ Decompress with default options (unsigned checksum, strict):
 	if err != nil {
 		return err
 	}
+
+Decompress one block from a byte stream and continue from current stream position:
+
+	out, consumed, err := lzss.DecompressFromReader(r, expectedLen, nil)
+	if err != nil {
+		return err
+	}
+	_ = consumed
 
 Round-trip compress and decompress:
 

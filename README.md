@@ -25,6 +25,18 @@ default: unsigned checksum, strict verification:
 out, err := lzss.Decompress(compressed, expectedLen, nil)
 ```
 
+decompress one block from `[]byte` and get consumed bytes:
+
+```go
+out, consumed, err := lzss.DecompressBlock(src, expectedLen, nil)
+```
+
+decompress one block from stream without reading to EOF:
+
+```go
+out, consumed, err := lzss.DecompressFromReader(r, expectedLen, nil)
+```
+
 Decompress with signed checksum and lenient verification
 (no error on checksum mismatch):
 
@@ -70,3 +82,6 @@ out, err := lzss.Compress(data, opts)
 * Two checksum modes and optional strict/lenient verification;
   choose options to match the stream format
   (e.g. archives vs certain texture formats).
+* Compressed block length is not stored in most containers.
+  `DecompressFromReader` and `DecompressBlock` stop when output buffer is full,
+  then read checksum and return consumed bytes.

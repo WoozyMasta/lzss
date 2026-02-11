@@ -7,5 +7,8 @@ var (
 	ErrInputTooShort    = errors.New("not enough data for checksum")
 	ErrUnexpectedEOF    = errors.New("unexpected end of input while reading flags")
 	ErrUnexpectedEOFBit = errors.New("unexpected end of input inside flags block")
+	ErrTrailingData     = errors.New("trailing bytes after lzss block")
+	ErrNilReader        = errors.New("reader is nil")
+	ErrNegativeOutLen   = errors.New("output length must be non-negative")
 	ErrEmptyInput       = errors.New("input is empty")
 )

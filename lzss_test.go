@@ -2,6 +2,7 @@ package lzss
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -169,5 +170,98 @@ func TestDecompressMinMatch2Option(t *testing.T) {
 	}
 	if !bytes.Equal(raw, dec) {
 		t.Fatalf("got %q", dec)
+	}
+}
+
+func TestDecompressBlockConsumesFirstBlockOnly(t *testing.T) {
+	rawA := []byte("first block data")
+	rawB := []byte("second block payload")
+	encA, err := Compress(rawA, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encB, err := Compress(rawB, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := append(append([]byte{}, encA...), encB...)
+
+	decA, consumedA, err := DecompressBlock(joined, len(rawA), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumedA != len(encA) {
+		t.Fatalf("consumedA=%d want=%d", consumedA, len(encA))
+	}
+	if !bytes.Equal(decA, rawA) {
+		t.Fatalf("got %q", decA)
+	}
+
+	decB, consumedB, err := DecompressBlock(joined[consumedA:], len(rawB), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumedB != len(encB) {
+		t.Fatalf("consumedB=%d want=%d", consumedB, len(encB))
+	}
+	if !bytes.Equal(decB, rawB) {
+		t.Fatalf("got %q", decB)
+	}
+}
+
+func TestDecompressFromReaderStopsAtBlockBoundary(t *testing.T) {
+	rawA := []byte("reader block alpha")
+	rawB := []byte("reader block beta")
+	encA, err := Compress(rawA, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encB, err := Compress(rawB, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stream := bytes.NewReader(append(append([]byte{}, encA...), encB...))
+	decA, consumedA, err := DecompressFromReader(stream, len(rawA), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumedA != int64(len(encA)) {
+		t.Fatalf("consumedA=%d want=%d", consumedA, len(encA))
+	}
+	if !bytes.Equal(decA, rawA) {
+		t.Fatalf("got %q", decA)
+	}
+
+	pos, err := stream.Seek(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pos != consumedA {
+		t.Fatalf("reader pos=%d want=%d", pos, consumedA)
+	}
+
+	decB, consumedB, err := DecompressFromReader(stream, len(rawB), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumedB != int64(len(encB)) {
+		t.Fatalf("consumedB=%d want=%d", consumedB, len(encB))
+	}
+	if !bytes.Equal(decB, rawB) {
+		t.Fatalf("got %q", decB)
+	}
+}
+
+func TestDecompressRejectsTrailingData(t *testing.T) {
+	raw := []byte("payload")
+	enc, err := Compress(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Decompress(append(append([]byte{}, enc...), 0xAA), len(raw), nil)
+	if !errors.Is(err, ErrTrailingData) {
+		t.Fatalf("want ErrTrailingData, got %v", err)
 	}
 }
