@@ -2,7 +2,7 @@ GO ?= go
 LINTER  ?= golangci-lint
 ALIGNER ?= betteralign
 
-.PHONY: test verify vet fmt fmt-check lint align align-fix check tidy download tools release-notes
+.PHONY: test bench verify vet fmt fmt-check lint align align-fix check tidy download tools release-notes
 
 check: fmt-check vet lint align test
 
@@ -21,6 +21,9 @@ vet:
 
 test:
 	$(GO) test ./...
+
+bench:
+	$(GO) test -run=^$$ -bench 'Benchmark' -benchmem
 
 verify:
 	$(GO) mod verify

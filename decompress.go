@@ -3,7 +3,6 @@ package lzss
 import (
 	"bufio"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 )
@@ -160,7 +159,7 @@ func decompressFromByteReader(r io.ByteReader, outLen int, opts *Options) ([]byt
 	readByte := func(eofErr error) (byte, error) {
 		b, err := r.ReadByte()
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			if err == io.EOF {
 				return 0, eofErr
 			}
 
@@ -265,7 +264,7 @@ func decompressFromByteReader(r io.ByteReader, outLen int, opts *Options) ([]byt
 		}
 	}
 
-	checksumBytes := make([]byte, 4)
+	var checksumBytes [4]byte
 	for i := 0; i < 4; i++ {
 		b, err := readByte(ErrInputTooShort)
 		if err != nil {
@@ -273,7 +272,7 @@ func decompressFromByteReader(r io.ByteReader, outLen int, opts *Options) ([]byt
 		}
 		checksumBytes[i] = b
 	}
-	readCrc := binary.LittleEndian.Uint32(checksumBytes)
+	readCrc := binary.LittleEndian.Uint32(checksumBytes[:])
 
 	if opts.VerifyChecksum {
 		if signed {

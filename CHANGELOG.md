@@ -28,8 +28,8 @@ and this project adheres to [Semantic Versioning][].
 
 ### Changed
 
-* `Decompress(src, outLen, opts)` now validates that the whole input belongs to one block
-  and returns `ErrTrailingData` when extra bytes are present.
+* `Decompress(src, outLen, opts)` now validates that the whole input belongs
+  to one block and returns `ErrTrailingData` when extra bytes are present.
 
 ## [0.1.1][] - 2026-02-11
 

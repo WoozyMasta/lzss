@@ -65,10 +65,35 @@ func Compress(src []byte, opts *CompressOptions) ([]byte, error) {
 	if minMatch == 0 {
 		minMatch = MinMatchDefault
 	}
+
+	// If search limit is 0, we don't need to search for matches.
 	limit := opts.SearchLimit
 	if limit <= 0 {
-		limit = 0
+		// Fast path for literals only (no match search window needed).
+		for i := 0; i < len(src); i++ {
+			flagByte |= 1 << bitCount
+			out = append(out, src[i])
+
+			bitCount++
+			if bitCount == FlagBits {
+				writeFlags()
+				if i+1 < len(src) {
+					startChunk()
+				}
+			}
+		}
+
+		if bitCount > 0 {
+			writeFlags()
+		}
+
+		buf := make([]byte, 4)
+		binary.LittleEndian.PutUint32(buf, uint32(crc)) // #nosec G115 -- store checksum bit pattern
+		out = append(out, buf...)
+
+		return out, nil
 	}
+
 	if limit > WindowSize {
 		limit = WindowSize
 	}
