@@ -265,3 +265,83 @@ func TestDecompressRejectsTrailingData(t *testing.T) {
 		t.Fatalf("want ErrTrailingData, got %v", err)
 	}
 }
+
+func TestDecompressNFromReader(t *testing.T) {
+	rawA := []byte("multi block A")
+	rawB := []byte("multi block B")
+	rawC := []byte("multi block C")
+	encA, err := Compress(rawA, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encB, err := Compress(rawB, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encC, err := Compress(rawC, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stream := bytes.NewReader(append(append(append([]byte{}, encA...), encB...), encC...))
+	blocks, consumed, err := DecompressNFromReader(stream, []int{len(rawA), len(rawB), len(rawC)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumed != int64(len(encA)+len(encB)+len(encC)) {
+		t.Fatalf("consumed=%d", consumed)
+	}
+	if len(blocks) != 3 {
+		t.Fatalf("blocks=%d", len(blocks))
+	}
+	if !bytes.Equal(blocks[0], rawA) || !bytes.Equal(blocks[1], rawB) || !bytes.Equal(blocks[2], rawC) {
+		t.Fatalf("decoded blocks mismatch")
+	}
+}
+
+func TestDecompressUntilEOF(t *testing.T) {
+	rawA := []byte("until eof one")
+	rawB := []byte("until eof two")
+	encA, err := Compress(rawA, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encB, err := Compress(rawB, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stream := bytes.NewReader(append(append([]byte{}, encA...), encB...))
+	lengths := []int{len(rawA), len(rawB)}
+	index := 0
+	next := func() (int, bool) {
+		if index >= len(lengths) {
+			return 0, false
+		}
+		outLen := lengths[index]
+		index++
+
+		return outLen, true
+	}
+
+	blocks, consumed, err := DecompressUntilEOF(stream, next, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumed != int64(len(encA)+len(encB)) {
+		t.Fatalf("consumed=%d", consumed)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("blocks=%d", len(blocks))
+	}
+	if !bytes.Equal(blocks[0], rawA) || !bytes.Equal(blocks[1], rawB) {
+		t.Fatalf("decoded blocks mismatch")
+	}
+}
+
+func TestDecompressUntilEOFNilProvider(t *testing.T) {
+	_, _, err := DecompressUntilEOF(bytes.NewReader(nil), nil, nil)
+	if !errors.Is(err, ErrNilOutLenProvider) {
+		t.Fatalf("want ErrNilOutLenProvider, got %v", err)
+	}
+}

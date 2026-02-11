@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning][].
   and consumed byte count for the first LZSS block in a byte slice.
 * `DecompressFromReader(r, outLen, opts)` decodes exactly one LZSS block
   from a stream and returns consumed byte count without reading to EOF.
+* `DecompressNFromReader(r, outLens, opts)` decodes multiple blocks from
+  a stream using expected output lengths.
+* `DecompressUntilEOF(r, nextOutLen, opts)` decodes blocks while callback
+  returns next expected output size.
 
 ### Changed
 

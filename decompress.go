@@ -47,8 +47,73 @@ func DecompressBlock(src []byte, outLen int, opts *Options) ([]byte, int, error)
 // DecompressFromReader decompresses one LZSS block from r and returns consumed bytes.
 // Decoding stops exactly after outLen output bytes and trailing 4-byte checksum are read.
 func DecompressFromReader(r io.Reader, outLen int, opts *Options) ([]byte, int64, error) {
+	countingReader, err := newCountingByteReader(r)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	out, err := decompressFromByteReader(countingReader, outLen, opts)
+	if err != nil {
+		return nil, countingReader.count, err
+	}
+
+	return out, countingReader.count, nil
+}
+
+// DecompressNFromReader decompresses N LZSS blocks from r with expected output lengths.
+// It returns decompressed blocks and total consumed byte count across all blocks.
+func DecompressNFromReader(r io.Reader, outLens []int, opts *Options) ([][]byte, int64, error) {
+	countingReader, err := newCountingByteReader(r)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	blocks := make([][]byte, 0, len(outLens))
+	for i, outLen := range outLens {
+		block, decodeErr := decompressFromByteReader(countingReader, outLen, opts)
+		if decodeErr != nil {
+			return blocks, countingReader.count, fmt.Errorf("decode block %d: %w", i, decodeErr)
+		}
+
+		blocks = append(blocks, block)
+	}
+
+	return blocks, countingReader.count, nil
+}
+
+// DecompressUntilEOF decompresses blocks from r while nextOutLen returns (outLen, true).
+// nextOutLen must provide expected unpacked size for each next block.
+func DecompressUntilEOF(r io.Reader, nextOutLen func() (int, bool), opts *Options) ([][]byte, int64, error) {
+	if nextOutLen == nil {
+		return nil, 0, ErrNilOutLenProvider
+	}
+
+	countingReader, err := newCountingByteReader(r)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var blocks [][]byte
+	for i := 0; ; i++ {
+		outLen, ok := nextOutLen()
+		if !ok {
+			break
+		}
+
+		block, decodeErr := decompressFromByteReader(countingReader, outLen, opts)
+		if decodeErr != nil {
+			return blocks, countingReader.count, fmt.Errorf("decode block %d: %w", i, decodeErr)
+		}
+
+		blocks = append(blocks, block)
+	}
+
+	return blocks, countingReader.count, nil
+}
+
+func newCountingByteReader(r io.Reader) (*countingByteReader, error) {
 	if r == nil {
-		return nil, 0, ErrNilReader
+		return nil, ErrNilReader
 	}
 
 	var byteReader io.ByteReader
@@ -58,13 +123,7 @@ func DecompressFromReader(r io.Reader, outLen int, opts *Options) ([]byte, int64
 		byteReader = bufio.NewReader(r)
 	}
 
-	countingReader := &countingByteReader{base: byteReader}
-	out, err := decompressFromByteReader(countingReader, outLen, opts)
-	if err != nil {
-		return nil, countingReader.count, err
-	}
-
-	return out, countingReader.count, nil
+	return &countingByteReader{base: byteReader}, nil
 }
 
 // decompressFromByteReader decompresses from a byte reader.

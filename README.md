@@ -37,6 +37,21 @@ decompress one block from stream without reading to EOF:
 out, consumed, err := lzss.DecompressFromReader(r, expectedLen, nil)
 ```
 
+decompress multiple blocks from stream with known output sizes:
+
+```go
+out, consumed, err := lzss.DecompressNFromReader(r, []int{lenA, lenB}, nil)
+```
+
+decompress blocks while callback returns next expected output size:
+
+```go
+next := func() (int, bool) {
+    // return next output size, true; return 0, false to stop
+}
+out, consumed, err := lzss.DecompressUntilEOF(r, next, nil)
+```
+
 Decompress with signed checksum and lenient verification
 (no error on checksum mismatch):
 

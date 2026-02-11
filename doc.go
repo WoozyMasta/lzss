@@ -10,6 +10,8 @@ Trailing 4-byte checksum: either unsigned (sum of bytes as uint8) or signed (sum
 Use Decompress(src, outLen, opts) with nil for default (unsigned, strict checksum).
 Use DecompressBlock(src, outLen, opts) to decode from the beginning of src and get consumed bytes.
 Use DecompressFromReader(r, outLen, opts) to decode one block from a stream without reading to EOF.
+Use DecompressNFromReader(r, outLens, opts) to decode multiple blocks with known output sizes.
+Use DecompressUntilEOF(r, nextOutLen, opts) when output size is provided by a callback.
 Use SignedLenientOptions() for formats that use signed checksum and ignore mismatch.
 Set Options.MinMatchLength or CompressOptions.MinMatchLength to MinMatch2 for 2..17 back-ref length.
 
@@ -29,6 +31,15 @@ Decompress one block from a byte stream and continue from current stream positio
 		return err
 	}
 	_ = consumed
+
+Decompress multiple blocks from a stream with known output sizes:
+
+	out, consumed, err := lzss.DecompressNFromReader(r, []int{lenA, lenB}, nil)
+	if err != nil {
+		return err
+	}
+	_ = consumed
+	_ = out
 
 Round-trip compress and decompress:
 
