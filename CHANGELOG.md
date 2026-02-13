@@ -13,6 +13,15 @@ and this project adheres to [Semantic Versioning][].
 ### Removed
 -->
 
+## [0.1.3][] - 2026-02-13
+
+### Changed
+
+* Refactoring code to reduce cognitive complexity and
+  leverage modern programming techniques.
+
+[0.1.3]: https://github.com/WoozyMasta/lzss/compare/v0.1.2...v0.1.3
+
 ## [0.1.2][] - 2026-02-11
 
 ### Added
