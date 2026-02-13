@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Maxim Levchenko (WoozyMasta)
+// Source: github.com/woozymasta/lzss
+
 /*
 Package lzss implements LZSS:8bit compression and decompression.
 

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Maxim Levchenko (WoozyMasta)
+// Source: github.com/woozymasta/lzss
+
 package lzss
 
 import (
@@ -177,7 +181,7 @@ func decompressFromByteReader(r io.ByteReader, outLen int, opts *Options) ([]byt
 		}
 
 		// Iterate over flag bytes for each output byte.
-		for bit := 0; bit < FlagBits; bit++ {
+		for bit := range FlagBits {
 			if pos >= outLen {
 				break
 			}
@@ -214,14 +218,8 @@ func decompressFromByteReader(r io.ByteReader, outLen int, opts *Options) ([]byt
 
 				// Offset can refer before start of output: fill with Filler (0x20) for those bytes.
 				if rpos < 0 {
-					fillCount := -rpos
-					if fillCount > need {
-						fillCount = need
-					}
-					endFill := pos + fillCount
-					if endFill > outLen {
-						endFill = outLen
-					}
+					fillCount := min(-rpos, need)
+					endFill := min(pos+fillCount, outLen)
 					for j := pos; j < endFill; j++ {
 						out[j] = Filler
 						addChecksum(Filler)
@@ -265,7 +263,7 @@ func decompressFromByteReader(r io.ByteReader, outLen int, opts *Options) ([]byt
 	}
 
 	var checksumBytes [4]byte
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		b, err := readByte(ErrInputTooShort)
 		if err != nil {
 			return nil, err

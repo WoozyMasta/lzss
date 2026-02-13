@@ -1,8 +1,14 @@
-GO ?= go
-LINTER  ?= golangci-lint
-ALIGNER ?= betteralign
+GO          ?= go
+LINTER      ?= golangci-lint
+ALIGNER     ?= betteralign
+BENCHSTAT   ?= benchstat
+BENCH_COUNT ?= 6
+BENCH_REF   ?= bench_baseline.txt
 
-.PHONY: test bench verify vet fmt fmt-check lint align align-fix check tidy download tools release-notes
+.PHONY: test bench bench-fast verify vet check \
+	fmt fmt-check lint lint-fix align align-fix \
+	tidy download tools tool-golangci-lint tool-betteralign tool-benchstat \
+	release-notes
 
 check: fmt-check vet lint align test
 
@@ -23,7 +29,17 @@ test:
 	$(GO) test ./...
 
 bench:
-	$(GO) test -run=^$$ -bench 'Benchmark' -benchmem
+	@tmp=$$(mktemp); \
+	$(GO) test ./... -run=^$$ -bench 'Benchmark' -benchmem -count=$(BENCH_COUNT) | tee "$$tmp"; \
+	if [ -f "$(BENCH_REF)" ]; then \
+		$(BENCHSTAT) "$(BENCH_REF)" "$$tmp"; \
+	else \
+		cp "$$tmp" "$(BENCH_REF)" && echo "Baseline saved to $(BENCH_REF)"; \
+	fi; \
+	rm -f "$$tmp"
+
+bench-fast:
+	$(GO) test ./... -run=^$$ -bench 'Benchmark' -benchmem
 
 verify:
 	$(GO) mod verify
@@ -37,15 +53,25 @@ download:
 lint:
 	$(LINTER) run ./...
 
+lint-fix:
+	$(LINTER) run --fix ./...
+
 align:
 	$(ALIGNER) ./...
 
 align-fix:
 	$(ALIGNER) -apply ./...
 
-tools:
+tools: tool-golangci-lint tool-betteralign tool-benchstat
+
+tool-golangci-lint:
 	$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+
+tool-betteralign:
 	$(GO) install github.com/dkorunic/betteralign/cmd/betteralign@latest
+
+tool-benchstat:
+	$(GO) install golang.org/x/perf/cmd/benchstat@latest
 
 release-notes:
 	@awk '\

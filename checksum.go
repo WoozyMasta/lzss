@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Maxim Levchenko (WoozyMasta)
+// Source: github.com/woozymasta/lzss
+
 package lzss
 
 // sumUnsigned returns the unsigned sum of bytes (for comparison with stored uint32).

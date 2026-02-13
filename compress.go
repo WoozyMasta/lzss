@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Maxim Levchenko (WoozyMasta)
+// Source: github.com/woozymasta/lzss
+
 package lzss
 
 import (
@@ -70,7 +74,7 @@ func Compress(src []byte, opts *CompressOptions) ([]byte, error) {
 	limit := opts.SearchLimit
 	if limit <= 0 {
 		// Fast path for literals only (no match search window needed).
-		for i := 0; i < len(src); i++ {
+		for i := range src {
 			flagByte |= 1 << bitCount
 			out = append(out, src[i])
 
@@ -105,13 +109,7 @@ func Compress(src []byte, opts *CompressOptions) ([]byte, error) {
 
 		// Find longest match in outData (search window) within limit bytes back.
 		if limit > 0 {
-			maxCheck := len(outData)
-			if maxCheck > WindowSize {
-				maxCheck = WindowSize
-			}
-			if maxCheck > limit {
-				maxCheck = limit
-			}
+			maxCheck := min(min(len(outData), WindowSize), limit)
 
 			for off := 1; off <= maxCheck; off++ {
 				length := 0

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Maxim Levchenko (WoozyMasta)
+// Source: github.com/woozymasta/lzss
+
 package lzss
 
 // ChecksumMode defines how the 4-byte checksum is computed.
