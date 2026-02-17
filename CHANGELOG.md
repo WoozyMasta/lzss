@@ -13,6 +13,24 @@ and this project adheres to [Semantic Versioning][].
 ### Removed
 -->
 
+## [0.1.4][] - 2026-02-17
+
+### Changed
+
+* Optimized decode hot path for byte-slice input: `DecompressBlock`
+  now uses a dedicated slice fast path instead of `io.ByteReader`.
+* Split slice decode into specialized unsigned/signed checksum paths to reduce
+  branching in inner loops.
+* Improved checksum handling in non-overlap copy path by summing source spans
+  directly before `copy(...)`, reducing per-byte loop overhead.
+* Reduced allocations in core benchmarks:
+  `Compress` and `Decompress` now use `1 alloc/op` on the main benchmark flow.
+* Reduced compressor temporary memory usage (`B/op`) by removing duplicated
+  reconstructed-buffer state in match search.
+* Added benchmark throughput reporting (`MB/s`).
+
+[0.1.4]: https://github.com/WoozyMasta/lzss/compare/v0.1.3...v0.1.4
+
 ## [0.1.3][] - 2026-02-13
 
 ### Changed
