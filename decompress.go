@@ -38,13 +38,7 @@ func DecompressBlock(src []byte, outLen int, opts *Options) ([]byte, int, error)
 		return nil, 0, ErrInputTooShort
 	}
 
-	reader := &sliceByteReader{data: src}
-	out, err := decompressFromByteReader(reader, outLen, opts)
-	if err != nil {
-		return nil, reader.pos, err
-	}
-
-	return out, reader.pos, nil
+	return decompressFromSlice(src, outLen, opts)
 }
 
 // DecompressFromReader decompresses one LZSS block from r and returns consumed bytes.
@@ -149,11 +143,21 @@ func decompressFromByteReader(r io.ByteReader, outLen int, opts *Options) ([]byt
 	out := make([]byte, outLen)
 	pos := 0
 
-	addChecksum := func(b byte) {
-		if signed {
+	var addChecksum func(b byte)
+	var addChecksumSpan func(data []byte)
+	if signed {
+		addChecksum = func(b byte) {
 			calcCrc += signedByteAsInt32(b)
-		} else {
+		}
+		addChecksumSpan = func(data []byte) {
+			calcCrc += sumSignedI32(data)
+		}
+	} else {
+		addChecksum = func(b byte) {
 			calcCrc += int32(b)
+		}
+		addChecksumSpan = func(data []byte) {
+			calcCrc += sumUnsigned(data)
 		}
 	}
 
@@ -243,10 +247,9 @@ func decompressFromByteReader(r io.ByteReader, outLen int, opts *Options) ([]byt
 							addChecksum(b)
 						}
 					} else {
-						copy(out[pos:pos+need], out[rpos:rpos+need])
-						for k := 0; k < need; k++ {
-							addChecksum(out[pos+k])
-						}
+						srcSpan := out[rpos : rpos+need]
+						addChecksumSpan(srcSpan)
+						copy(out[pos:pos+need], srcSpan)
 					}
 					pos += need
 				}
@@ -287,6 +290,271 @@ func decompressFromByteReader(r io.ByteReader, outLen int, opts *Options) ([]byt
 	}
 
 	return out, nil
+}
+
+// decompressFromSlice decompresses one LZSS block from in-memory bytes and reports consumed input bytes.
+func decompressFromSlice(src []byte, outLen int, opts *Options) ([]byte, int, error) {
+	if opts == nil {
+		opts = DefaultOptions()
+	}
+
+	if outLen < 0 {
+		return nil, 0, ErrNegativeOutLen
+	}
+
+	minMatch := opts.MinMatchLength
+	if minMatch == 0 {
+		minMatch = MinMatchDefault
+	}
+
+	if opts.Checksum == ChecksumSigned {
+		return decompressFromSliceSigned(src, outLen, minMatch, opts.VerifyChecksum)
+	}
+
+	return decompressFromSliceUnsigned(src, outLen, minMatch, opts.VerifyChecksum)
+}
+
+// decompressFromSliceUnsigned is the hot path for default unsigned checksum mode.
+//
+//nolint:dupl // Intentional specialization for hot loop performance.
+func decompressFromSliceUnsigned(src []byte, outLen, minMatch int, verifyChecksum bool) ([]byte, int, error) {
+	var calcCrc uint32
+	out := make([]byte, outLen)
+	inPos := 0
+	pos := 0
+
+	// Iterate over output bytes.
+	for pos < outLen {
+		if inPos >= len(src) {
+			return nil, inPos, ErrUnexpectedEOF
+		}
+
+		flagByte := src[inPos]
+		inPos++
+
+		// Iterate over flag bits for each output byte.
+		for bit := range FlagBits {
+			if pos >= outLen {
+				break
+			}
+
+			// If bit is 1, it's a literal: 1 bit, 1 byte otherwise it's a pointer.
+			if (flagByte>>bit)&1 == 1 {
+				if inPos >= len(src) {
+					return nil, inPos, ErrUnexpectedEOFBit
+				}
+
+				b := src[inPos]
+				inPos++
+
+				out[pos] = b
+				calcCrc += uint32(b)
+				pos++
+
+				continue
+			}
+
+			if inPos+2 > len(src) {
+				return nil, inPos, ErrUnexpectedEOFBit
+			}
+
+			lo := int(src[inPos])
+			hi := int(src[inPos+1])
+			inPos += 2
+
+			// Pointer byte layout: [offset_lo8, (offset_hi4<<4)|(length-minMatch)].
+			offset := lo + ((hi & 0xF0) << 4)
+			length := (hi & 0x0F) + minMatch
+
+			rpos := pos - offset // source start in output buffer
+			need := length       // bytes to copy (may be capped by outLen later)
+
+			// Offset can refer before start of output: fill with Filler (0x20) for those bytes.
+			if rpos < 0 {
+				fillCount := min(-rpos, need)
+				endFill := min(pos+fillCount, outLen)
+				for j := pos; j < endFill; j++ {
+					out[j] = Filler
+					calcCrc += uint32(Filler)
+				}
+				pos += fillCount
+				need -= fillCount
+				rpos = 0
+			}
+
+			// Copy bytes from source to output.
+			if need > 0 && pos < outLen {
+				if pos+need > outLen {
+					need = outLen - pos
+				}
+				// Overlapping back-ref (offset < need): must copy byte-by-byte so each written byte
+				// is visible to the next read (RLE-like). copy(dst, src) does not handle overlap.
+				if offset < need {
+					for k := 0; k < need; k++ {
+						b := out[rpos+k]
+						out[pos+k] = b
+						calcCrc += uint32(b)
+					}
+				} else {
+					srcSpan := out[rpos : rpos+need]
+					calcCrc += sumUnsignedU32(srcSpan)
+					copy(out[pos:pos+need], srcSpan)
+				}
+				pos += need
+			}
+		}
+	}
+
+	var checksumBytes [4]byte
+	for i := range 4 {
+		if inPos >= len(src) {
+			return nil, inPos, ErrInputTooShort
+		}
+
+		checksumBytes[i] = src[inPos]
+		inPos++
+	}
+	readCrc := binary.LittleEndian.Uint32(checksumBytes[:])
+
+	if verifyChecksum {
+		if calcCrc != readCrc {
+			return nil, inPos, fmt.Errorf("checksum mismatch (unsigned): got=0x%x expected=0x%x", calcCrc, readCrc)
+		}
+	}
+
+	return out, inPos, nil
+}
+
+// decompressFromSliceSigned is the hot path for signed checksum mode.
+//
+//nolint:dupl // Intentional specialization for hot loop performance.
+func decompressFromSliceSigned(src []byte, outLen, minMatch int, verifyChecksum bool) ([]byte, int, error) {
+	var calcCrc int32
+	out := make([]byte, outLen)
+	inPos := 0
+	pos := 0
+
+	// Iterate over output bytes.
+	for pos < outLen {
+		if inPos >= len(src) {
+			return nil, inPos, ErrUnexpectedEOF
+		}
+
+		flagByte := src[inPos]
+		inPos++
+
+		// Iterate over flag bits for each output byte.
+		for bit := range FlagBits {
+			if pos >= outLen {
+				break
+			}
+
+			// If bit is 1, it's a literal: 1 bit, 1 byte otherwise it's a pointer.
+			if (flagByte>>bit)&1 == 1 {
+				if inPos >= len(src) {
+					return nil, inPos, ErrUnexpectedEOFBit
+				}
+
+				b := src[inPos]
+				inPos++
+
+				out[pos] = b
+				calcCrc += signedByteAsInt32(b)
+				pos++
+
+				continue
+			}
+
+			if inPos+2 > len(src) {
+				return nil, inPos, ErrUnexpectedEOFBit
+			}
+
+			lo := int(src[inPos])
+			hi := int(src[inPos+1])
+			inPos += 2
+
+			// Pointer byte layout: [offset_lo8, (offset_hi4<<4)|(length-minMatch)].
+			offset := lo + ((hi & 0xF0) << 4)
+			length := (hi & 0x0F) + minMatch
+
+			rpos := pos - offset // source start in output buffer
+			need := length       // bytes to copy (may be capped by outLen later)
+
+			// Offset can refer before start of output: fill with Filler (0x20) for those bytes.
+			if rpos < 0 {
+				fillCount := min(-rpos, need)
+				endFill := min(pos+fillCount, outLen)
+				for j := pos; j < endFill; j++ {
+					out[j] = Filler
+					calcCrc += signedByteAsInt32(Filler)
+				}
+				pos += fillCount
+				need -= fillCount
+				rpos = 0
+			}
+
+			// Copy bytes from source to output.
+			if need > 0 && pos < outLen {
+				if pos+need > outLen {
+					need = outLen - pos
+				}
+				// Overlapping back-ref (offset < need): must copy byte-by-byte so each written byte
+				// is visible to the next read (RLE-like). copy(dst, src) does not handle overlap.
+				if offset < need {
+					for k := 0; k < need; k++ {
+						b := out[rpos+k]
+						out[pos+k] = b
+						calcCrc += signedByteAsInt32(b)
+					}
+				} else {
+					srcSpan := out[rpos : rpos+need]
+					calcCrc += sumSignedI32(srcSpan)
+					copy(out[pos:pos+need], srcSpan)
+				}
+				pos += need
+			}
+		}
+	}
+
+	var checksumBytes [4]byte
+	for i := range 4 {
+		if inPos >= len(src) {
+			return nil, inPos, ErrInputTooShort
+		}
+
+		checksumBytes[i] = src[inPos]
+		inPos++
+	}
+	readCrc := binary.LittleEndian.Uint32(checksumBytes[:])
+
+	if verifyChecksum {
+		// #nosec G115 -- intentional: compare stored uint32 as int32 for signed checksum
+		if calcCrc != int32(readCrc) {
+			return nil, inPos, fmt.Errorf("checksum mismatch (signed): got=0x%x expected=0x%x", uint32(calcCrc), readCrc)
+		}
+	}
+
+	return out, inPos, nil
+}
+
+// sumUnsignedU32 returns unsigned sum of data bytes modulo uint32.
+func sumUnsignedU32(data []byte) uint32 {
+	var s uint32
+	for _, b := range data {
+		s += uint32(b)
+	}
+
+	return s
+}
+
+// sumSignedI32 returns signed sum of data bytes modulo int32.
+func sumSignedI32(data []byte) int32 {
+	var s int32
+	for _, b := range data {
+		s += signedByteAsInt32(b)
+	}
+
+	return s
 }
 
 // signedByteAsInt32 converts byte to signed 8-bit value widened to int32.

@@ -46,7 +46,6 @@ func Compress(src []byte, opts *CompressOptions) ([]byte, error) {
 	// Pre-allocate: worst case is all literals + flag bytes + 4 crc; slight overestimate.
 	bufCap := len(src) + (len(src)+7)/8 + 4 + 64
 	out := make([]byte, 0, bufCap)
-	outData := make([]byte, 0, len(src)) // Reconstructed output so far; used as search window for matches.
 
 	var flagByte byte
 	bitCount := 0
@@ -107,26 +106,21 @@ func Compress(src []byte, opts *CompressOptions) ([]byte, error) {
 		bestLen := 0
 		bestOff := 0
 
-		// Find longest match in outData (search window) within limit bytes back.
+		// Find longest match in already processed source prefix (search window).
 		if limit > 0 {
-			maxCheck := min(min(len(outData), WindowSize), limit)
+			maxCheck := min(min(i, WindowSize), limit)
 
 			for off := 1; off <= maxCheck; off++ {
-				length := 0
-				checkIdx := i + length
-				refIdx := len(outData) - off + length
-				for length < MaxMatch && checkIdx < len(src) {
-					if refIdx < 0 || refIdx >= len(outData) {
-						break
-					}
+				maxLen := min(MaxMatch, len(src)-i)
+				maxLen = min(maxLen, off)
 
-					if outData[refIdx] != src[checkIdx] {
+				length := 0
+				for length < maxLen {
+					if src[i-off+length] != src[i+length] {
 						break
 					}
 
 					length++
-					checkIdx++
-					refIdx++
 				}
 
 				if length > bestLen {
@@ -152,12 +146,10 @@ func Compress(src []byte, opts *CompressOptions) ([]byte, error) {
 			pLen := (length - minMatch) << 8
 			pointer := uint16(hi4 | low | pLen) // #nosec G115
 			out = append(out, byte(pointer&0xFF), byte(pointer>>8))
-			outData = append(outData, src[i:i+length]...)
 			i += length
 		} else {
 			flagByte |= 1 << bitCount
 			out = append(out, src[i])
-			outData = append(outData, src[i])
 			i++
 		}
 
