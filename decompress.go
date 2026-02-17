@@ -151,7 +151,7 @@ func decompressFromByteReader(r io.ByteReader, outLen int, opts *Options) ([]byt
 
 	addChecksum := func(b byte) {
 		if signed {
-			calcCrc += int32(int8(b))
+			calcCrc += signedByteAsInt32(b)
 		} else {
 			calcCrc += int32(b)
 		}
@@ -287,4 +287,13 @@ func decompressFromByteReader(r io.ByteReader, outLen int, opts *Options) ([]byt
 	}
 
 	return out, nil
+}
+
+// signedByteAsInt32 converts byte to signed 8-bit value widened to int32.
+func signedByteAsInt32(b byte) int32 {
+	if b < 0x80 {
+		return int32(b)
+	}
+
+	return int32(b) - 0x100
 }
