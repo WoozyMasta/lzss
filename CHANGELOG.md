@@ -13,6 +13,20 @@ and this project adheres to [Semantic Versioning][].
 ### Removed
 -->
 
+## [0.1.5][] - 2026-02-18
+
+### Added
+
+* `DecompressToWriter(dst, src, outLen, opts)`
+  for bounded-memory stream decode directly into `io.Writer`.
+* Decode benchmarks for stream paths.
+
+### Changed
+
+* Added explicit `ErrNilWriter` for stream decode API validation.
+
+[0.1.5]: https://github.com/WoozyMasta/lzss/compare/v0.1.4...v0.1.5
+
 ## [0.1.4][] - 2026-02-17
 
 ### Changed
