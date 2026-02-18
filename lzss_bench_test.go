@@ -3,6 +3,7 @@ package lzss
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"testing"
 )
 
@@ -45,5 +46,57 @@ func BenchmarkDecompress(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _ = Decompress(enc, len(data), nil)
+	}
+}
+
+func BenchmarkDecompressFromReader(b *testing.B) {
+	data := benchInput
+	enc, err := Compress(data, DefaultCompressOptions())
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(data)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := bytes.NewReader(enc)
+		_, _, _ = DecompressFromReader(r, len(data), nil)
+	}
+}
+
+func BenchmarkDecompressToWriterDiscard(b *testing.B) {
+	data := benchInput
+	enc, err := Compress(data, DefaultCompressOptions())
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(data)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := bytes.NewReader(enc)
+		_, _ = DecompressToWriter(io.Discard, r, len(data), nil)
+	}
+}
+
+func BenchmarkDecompressToWriterBuffer(b *testing.B) {
+	data := benchInput
+	enc, err := Compress(data, DefaultCompressOptions())
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	out.Grow(len(data))
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(data)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		out.Reset()
+		r := bytes.NewReader(enc)
+		_, _ = DecompressToWriter(&out, r, len(data), nil)
 	}
 }

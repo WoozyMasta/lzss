@@ -6,18 +6,21 @@
 Package lzss implements LZSS:8bit compression and decompression.
 
 Format: one flag byte per 8 slots; bit 1 = literal (1 byte), bit 0 = pointer (2 bytes).
+
 Pointer: 12-bit backward offset from current output position, 4-bit length nibble.
+
 Default (MinMatchLength 3): length = nibble+3 -> 3..18 bytes. Use MinMatch2 for nibble+2 -> 2..17.
 Sliding window: 4096 bytes; filler 0x20 when offset refers before start of output.
 Trailing 4-byte checksum: either unsigned (sum of bytes as uint8) or signed (sum as int8).
 
-Use Decompress(src, outLen, opts) with nil for default (unsigned, strict checksum).
-Use DecompressBlock(src, outLen, opts) to decode from the beginning of src and get consumed bytes.
-Use DecompressFromReader(r, outLen, opts) to decode one block from a stream without reading to EOF.
-Use DecompressNFromReader(r, outLens, opts) to decode multiple blocks with known output sizes.
-Use DecompressUntilEOF(r, nextOutLen, opts) when output size is provided by a callback.
-Use SignedLenientOptions() for formats that use signed checksum and ignore mismatch.
-Set Options.MinMatchLength or CompressOptions.MinMatchLength to MinMatch2 for 2..17 back-ref length.
+  - Use Decompress(src, outLen, opts) with nil for default (unsigned, strict checksum).
+  - Use DecompressBlock(src, outLen, opts) to decode from the beginning of src and get consumed bytes.
+  - Use DecompressFromReader(r, outLen, opts) to decode one block from a stream without reading to EOF.
+  - Use DecompressToWriter(w, r, outLen, opts) for bounded-memory streaming decode into io.Writer.
+  - Use DecompressNFromReader(r, outLens, opts) to decode multiple blocks with known output sizes.
+  - Use DecompressUntilEOF(r, nextOutLen, opts) when output size is provided by a callback.
+  - Use SignedLenientOptions() for formats that use signed checksum and ignore mismatch.
+  - Set Options.MinMatchLength or CompressOptions.MinMatchLength to MinMatch2 for 2..17 back-ref length.
 
 # Examples
 

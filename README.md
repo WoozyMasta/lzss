@@ -36,6 +36,13 @@ decompress one block from stream without reading to EOF:
 out, consumed, err := lzss.DecompressFromReader(r, expectedLen, nil)
 ```
 
+decompress one block from stream directly to `io.Writer`
+(without full output allocation):
+
+```go
+consumed, err := lzss.DecompressToWriter(dst, r, expectedLen, nil)
+```
+
 decompress multiple blocks from stream with known output sizes:
 
 ```go

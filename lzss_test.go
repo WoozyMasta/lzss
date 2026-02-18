@@ -253,6 +253,48 @@ func TestDecompressFromReaderStopsAtBlockBoundary(t *testing.T) {
 	}
 }
 
+func TestDecompressToWriter(t *testing.T) {
+	raw := []byte("stream decode payload")
+	enc, err := Compress(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	consumed, err := DecompressToWriter(&out, bytes.NewReader(enc), len(raw), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumed != int64(len(enc)) {
+		t.Fatalf("consumed=%d want=%d", consumed, len(enc))
+	}
+	if !bytes.Equal(out.Bytes(), raw) {
+		t.Fatalf("got %q", out.Bytes())
+	}
+}
+
+func TestDecompressToWriterNilWriter(t *testing.T) {
+	_, err := DecompressToWriter(nil, bytes.NewReader([]byte{1, 2, 3, 4}), 1, nil)
+	if !errors.Is(err, ErrNilWriter) {
+		t.Fatalf("want ErrNilWriter, got %v", err)
+	}
+}
+
+func TestDecompressToWriterChecksumMismatch(t *testing.T) {
+	raw := []byte("abc")
+	enc, err := Compress(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc[len(enc)-1] ^= 0xFF
+
+	var out bytes.Buffer
+	_, err = DecompressToWriter(&out, bytes.NewReader(enc), len(raw), nil)
+	if err == nil {
+		t.Fatal("expected checksum mismatch error")
+	}
+}
+
 func TestDecompressRejectsTrailingData(t *testing.T) {
 	raw := []byte("payload")
 	enc, err := Compress(raw, nil)
