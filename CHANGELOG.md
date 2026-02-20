@@ -13,6 +13,15 @@ and this project adheres to [Semantic Versioning][].
 ### Removed
 -->
 
+## [0.1.6][] - 2026-02-21
+
+### Added
+
+* `CompressToWriter(dst, src, opts)` for bounded-memory stream encode
+  directly into `io.Writer` without allocating full output.
+
+[0.1.6]: https://github.com/WoozyMasta/lzss/compare/v0.1.5...v0.1.6
+
 ## [0.1.5][] - 2026-02-18
 
 ### Added

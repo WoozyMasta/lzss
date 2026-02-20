@@ -19,6 +19,18 @@ func BenchmarkCompress(b *testing.B) {
 	}
 }
 
+func BenchmarkCompressToWriter(b *testing.B) {
+	data := benchInput
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(data)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		src := bytes.NewReader(data)
+		_, _, _ = CompressToWriter(io.Discard, src, DefaultCompressOptions())
+	}
+}
+
 func BenchmarkCompressSearchLevels(b *testing.B) {
 	data := benchInput
 	levels := []int{0, 64, 256, 1024, 2048, 4096}
