@@ -73,6 +73,12 @@ default search limit 2048:
 out, err := lzss.Compress(data, nil)
 ```
 
+stream compress from `io.Reader` to `io.Writer` (bounded memory):
+
+```go
+inSize, outSize, err := lzss.CompressToWriter(dst, src, nil)
+```
+
 with options (search limit, checksum mode, encodes length):
 
 ```go

@@ -71,5 +71,13 @@ Compress and decompress with min match length 2 (back-ref length 2..17):
 	enc, _ := lzss.Compress(data, copts)
 	dopts := &lzss.Options{MinMatchLength: lzss.MinMatch2, VerifyChecksum: true}
 	dec, _ := lzss.Decompress(enc, len(data), dopts)
+
+Compress one source stream directly to destination writer:
+
+	inSize, outSize, err := lzss.CompressToWriter(dst, src, nil)
+	if err != nil {
+		return err
+	}
+	_, _ = inSize, outSize
 */
 package lzss
