@@ -45,16 +45,18 @@ func (writer *countingWriter) Write(p []byte) (int, error) {
 func (source *compressByteSource) readByte() (byte, bool, error) {
 	if source.pos >= source.n {
 		n, err := source.base.Read(source.buf)
-		if n > 0 {
+		switch {
+		case n > 0:
 			source.pos = 0
 			source.n = n
-		} else if err != nil {
+
+		case err != nil:
 			if errors.Is(err, io.EOF) {
 				return 0, false, nil
 			}
-
 			return 0, false, err
-		} else {
+
+		default:
 			return 0, false, io.ErrNoProgress
 		}
 	}
@@ -84,10 +86,7 @@ func CompressToWriter(dst io.Writer, src io.Reader, opts *CompressOptions) (int6
 		minMatch = MinMatchDefault
 	}
 
-	searchLimit := opts.SearchLimit
-	if searchLimit > WindowSize {
-		searchLimit = WindowSize
-	}
+	searchLimit := min(opts.SearchLimit, WindowSize)
 
 	signed := opts.Checksum == ChecksumSigned
 	var checksum int32
@@ -137,7 +136,7 @@ func CompressToWriter(dst io.Writer, src io.Reader, opts *CompressOptions) (int6
 
 	// advance commits n bytes from lookahead into history and checksum.
 	advance := func(n int) {
-		for i := 0; i < n; i++ {
+		for i := range n {
 			b := lookahead[i]
 			addChecksum(b)
 
