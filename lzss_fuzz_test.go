@@ -53,16 +53,16 @@ func FuzzRoundTripAllPaths(f *testing.F) {
 }
 
 func FuzzDecodePathParity(f *testing.F) {
-	f.Add([]byte{1, 'x', 'x', 0, 0, 0}, 1, false)
-	f.Add([]byte{0, 1, 15, 0x13, 0x04, 0, 0}, 18, true)
-	f.Add([]byte{0xff}, 8, false)
+	f.Add([]byte{1, 'x', 'x', 0, 0, 0}, 1, false, true)
+	f.Add([]byte{0, 1, 15, 0x13, 0x04, 0, 0}, 18, true, true)
+	f.Add([]byte{0xff}, 8, false, false)
 
-	f.Fuzz(func(t *testing.T, encoded []byte, outLen int, signed bool) {
+	f.Fuzz(func(t *testing.T, encoded []byte, outLen int, signed, verify bool) {
 		if outLen < 0 || outLen > 8*1024 || len(encoded) > 16*1024 {
 			t.Skip()
 		}
 
-		opts := &Options{VerifyChecksum: true}
+		opts := &Options{VerifyChecksum: verify}
 		if signed {
 			opts.Checksum = ChecksumSigned
 		}

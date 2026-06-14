@@ -189,6 +189,31 @@ func BenchmarkChecksum(b *testing.B) {
 	})
 }
 
+func BenchmarkDecompressChecksumMode(b *testing.B) {
+	data := benchmarkCorpora[2].data
+
+	for _, checksum := range []ChecksumMode{ChecksumUnsigned, ChecksumSigned} {
+		name := "unsigned"
+		if checksum == ChecksumSigned {
+			name = "signed"
+		}
+
+		encoded, err := Compress(data, &CompressOptions{Checksum: checksum, SearchLimit: 0})
+		if err != nil {
+			b.Fatal(err)
+		}
+		opts := &Options{Checksum: checksum, VerifyChecksum: true}
+
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(data)))
+			for b.Loop() {
+				_, _, _ = DecompressBlock(encoded, len(data), opts)
+			}
+		})
+	}
+}
+
 func BenchmarkDecompressOverlapBackref(b *testing.B) {
 	encoded := makeOverlapBackrefBlock(benchmarkCorpusSize)
 	opts := DefaultOptions()
