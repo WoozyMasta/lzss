@@ -13,8 +13,6 @@ import (
 const (
 	// compressReadBufferSize is internal source read chunk size for stream compressor.
 	compressReadBufferSize = 4 * 1024
-	// windowMask enables faster modulo for 4096-size ring buffer.
-	windowMask = WindowSize - 1
 )
 
 // countingWriter writes to base writer and tracks written byte count.

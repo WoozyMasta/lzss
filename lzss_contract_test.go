@@ -8,6 +8,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"math"
+	"math/rand"
+	"strconv"
 	"testing"
 )
 
@@ -66,6 +69,129 @@ func TestRoundTripOptionMatrix(t *testing.T) {
 	}
 }
 
+func TestCompressRatioRegression(t *testing.T) {
+	longDistanceBlock := make([]byte, 3072)
+	_, _ = rand.New(rand.NewSource(1)).Read(longDistanceBlock)
+
+	tests := []struct {
+		name     string
+		input    []byte
+		opts     *CompressOptions
+		maxRatio float64
+	}{
+		{
+			name:     "overlap",
+			input:    bytes.Repeat([]byte("A"), 4096),
+			opts:     DefaultCompressOptions(),
+			maxRatio: 0.13,
+		},
+		{
+			name:     "min-match-2",
+			input:    bytes.Repeat([]byte("ab"), 2048),
+			opts:     &CompressOptions{SearchLimit: 256, MinMatchLength: MinMatch2},
+			maxRatio: 0.13,
+		},
+		{
+			name:     "long-distance",
+			input:    append(append([]byte(nil), longDistanceBlock...), longDistanceBlock...),
+			opts:     &CompressOptions{SearchLimit: 4096},
+			maxRatio: 0.65,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := Compress(test.input, test.opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ratio := float64(len(encoded)) / float64(len(test.input))
+			if ratio > test.maxRatio {
+				t.Fatalf("ratio=%f max=%f", ratio, test.maxRatio)
+			}
+		})
+	}
+}
+
+func TestCompressDeterministicOutput(t *testing.T) {
+	input := bytes.Repeat([]byte("deterministic compressor payload"), 256)
+	opts := &CompressOptions{Checksum: ChecksumSigned, SearchLimit: WindowSize, MinMatchLength: MinMatch2}
+
+	first, err := Compress(input, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Compress(input, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("compressed output differs between identical calls")
+	}
+}
+
+func TestCompressSearchLimitBoundary(t *testing.T) {
+	block := make([]byte, 3072)
+	_, _ = rand.New(rand.NewSource(2)).Read(block)
+	input := append(append([]byte(nil), block...), block...)
+
+	inside, err := Compress(input, &CompressOptions{SearchLimit: 4096})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside, err := Compress(input, &CompressOptions{SearchLimit: 2048})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inside) >= len(outside) {
+		t.Fatalf("larger search limit did not find long-distance matches: inside=%d outside=%d", len(inside), len(outside))
+	}
+}
+
+func TestCompressAvoidsOverlapBackrefs(t *testing.T) {
+	input := bytes.Repeat([]byte("A"), 4096)
+	encoded, err := Compress(input, DefaultCompressOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inPos := 0
+	produced := 0
+	for produced < len(input) {
+		flags := encoded[inPos]
+		inPos++
+		for bit := range FlagBits {
+			if produced >= len(input) {
+				break
+			}
+			if (flags>>bit)&1 == 1 {
+				inPos++
+				produced++
+				continue
+			}
+
+			lo := int(encoded[inPos])
+			hi := int(encoded[inPos+1])
+			inPos += 2
+			offset := lo + ((hi & 0xf0) << 4)
+			length := (hi & 0x0f) + MinMatchDefault
+			if offset < length {
+				t.Fatalf("overlap backref generated: offset=%d length=%d", offset, length)
+			}
+			produced += length
+		}
+	}
+}
+
+func TestMatchFinderInputLimit(t *testing.T) {
+	if matchFinderInputTooLarge(math.MaxInt32) {
+		t.Fatal("maximum supported input rejected")
+	}
+	if strconv.IntSize == 64 && !matchFinderInputTooLarge(int(int64(math.MaxInt32)+1)) {
+		t.Fatal("oversized input accepted")
+	}
+}
+
 func TestDecompressBlockLenientModesIgnoreChecksum(t *testing.T) {
 	raw := bytes.Repeat([]byte{0x00, 0x7f, 0x80, 0xff}, 128)
 
@@ -114,6 +240,7 @@ func TestDecompressToWriterPropagatesWriterError(t *testing.T) {
 	}
 }
 
+// errorWriter returns a configured error for every write.
 type errorWriter struct {
 	err error
 }
@@ -122,6 +249,7 @@ func (writer errorWriter) Write([]byte) (int, error) {
 	return 0, writer.err
 }
 
+// appendChecksum appends the checksum for output to an encoded payload.
 func appendChecksum(payload, output []byte, mode ChecksumMode) []byte {
 	encoded := append([]byte(nil), payload...)
 	var checksum int32

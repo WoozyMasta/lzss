@@ -90,6 +90,7 @@ func FuzzDecodePathParity(f *testing.F) {
 	})
 }
 
+// assertDecodePathsEqual checks output and consumed-byte parity across public decoders.
 func assertDecodePathsEqual(t *testing.T, want, encoded []byte, opts *Options) {
 	t.Helper()
 

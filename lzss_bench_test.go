@@ -15,6 +15,7 @@ import (
 
 const benchmarkCorpusSize = 64 * 1024
 
+// benchmarkCorpus names one deterministic benchmark input.
 type benchmarkCorpus struct {
 	name string
 	data []byte
@@ -22,6 +23,7 @@ type benchmarkCorpus struct {
 
 var benchmarkCorpora = newBenchmarkCorpora()
 
+// newBenchmarkCorpora builds deterministic inputs for distinct codec workloads.
 func newBenchmarkCorpora() []benchmarkCorpus {
 	incompressible := make([]byte, benchmarkCorpusSize)
 	_, _ = rand.New(rand.NewSource(1)).Read(incompressible)
@@ -146,6 +148,7 @@ func BenchmarkDecompressToWriterCorpus(b *testing.B) {
 	})
 }
 
+// benchmarkReaderDecode runs reader-based decode implementations over all corpora.
 func benchmarkReaderDecode(b *testing.B, decode func([]byte, int, *Options)) {
 	b.Helper()
 
@@ -236,6 +239,7 @@ func BenchmarkDecompressOverlapBackref(b *testing.B) {
 	})
 }
 
+// benchmarkEncodeOptions avoids expensive match search when preparing literal-heavy decode input.
 func benchmarkEncodeOptions(corpus string) *CompressOptions {
 	opts := DefaultCompressOptions()
 	if corpus == "incompressible" {
@@ -244,10 +248,12 @@ func benchmarkEncodeOptions(corpus string) *CompressOptions {
 	return opts
 }
 
+// compressionRatio returns encoded size divided by raw size.
 func compressionRatio(encoded, raw []byte) float64 {
 	return float64(len(encoded)) / float64(len(raw))
 }
 
+// makeOverlapBackrefBlock builds a valid block dominated by overlapping back-references.
 func makeOverlapBackrefBlock(outLen int) []byte {
 	const (
 		literal = byte('A')

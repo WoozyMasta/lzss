@@ -9,6 +9,9 @@ const (
 	// WindowSize is the sliding window size (ring buffer).
 	WindowSize = 4096
 
+	// windowMask enables faster modulo for the power-of-two window size.
+	windowMask = WindowSize - 1
+
 	// MaxMatch is the maximum back-reference length when MinMatchLength is 3 (encoded 3..18).
 	MaxMatch = 18
 

@@ -6,7 +6,23 @@ package lzss
 
 import (
 	"encoding/binary"
+	"math"
 )
+
+const (
+	// matchHashBits is the number of bits used to index match hash buckets.
+	matchHashBits = 12
+	// matchHashSize is the number of buckets in the match hash table.
+	matchHashSize = 1 << matchHashBits
+	// matchHashMask maps a match hash to a valid bucket index.
+	matchHashMask = matchHashSize - 1
+)
+
+// matchFinder indexes previous source positions by short-prefix hash.
+type matchFinder struct {
+	head  [matchHashSize]int32
+	chain [WindowSize]int32
+}
 
 // CompressOptions configures compression (checksum mode and search limit).
 type CompressOptions struct {
@@ -100,38 +116,14 @@ func Compress(src []byte, opts *CompressOptions) ([]byte, error) {
 	if limit > WindowSize {
 		limit = WindowSize
 	}
+	if matchFinderInputTooLarge(len(src)) {
+		return nil, ErrInputTooLarge
+	}
 
+	finder := new(matchFinder)
 	i := 0
 	for i < len(src) {
-		bestLen := 0
-		bestOff := 0
-
-		// Find longest match in already processed source prefix (search window).
-		if limit > 0 {
-			maxCheck := min(min(i, WindowSize), limit)
-
-			for off := 1; off <= maxCheck; off++ {
-				maxLen := min(MaxMatch, len(src)-i)
-				maxLen = min(maxLen, off)
-
-				length := 0
-				for length < maxLen {
-					if src[i-off+length] != src[i+length] {
-						break
-					}
-
-					length++
-				}
-
-				if length > bestLen {
-					bestLen = length
-					bestOff = off
-					if bestLen == MaxMatch {
-						break
-					}
-				}
-			}
-		}
+		bestLen, bestOff := finder.find(src, i, limit, minMatch)
 
 		if bestLen >= minMatch {
 			// Encode back-reference: LE 16-bit = [offset_lo8, (offset_hi4<<4)|(length-minMatch)]; length minMatch..minMatch+15.
@@ -146,10 +138,12 @@ func Compress(src []byte, opts *CompressOptions) ([]byte, error) {
 			pLen := (length - minMatch) << 8
 			pointer := uint16(hi4 | low | pLen) // #nosec G115
 			out = append(out, byte(pointer&0xFF), byte(pointer>>8))
+			finder.insertRange(src, i, length, minMatch)
 			i += length
 		} else {
 			flagByte |= 1 << bitCount
 			out = append(out, src[i])
+			finder.insert(src, i, minMatch)
 			i++
 		}
 
@@ -171,4 +165,85 @@ func Compress(src []byte, opts *CompressOptions) ([]byte, error) {
 	out = append(out, buf...)
 
 	return out, nil
+}
+
+// find returns the longest indexed match and its backward offset for pos.
+func (finder *matchFinder) find(src []byte, pos, limit, minMatch int) (int, int) {
+	maxLen := min(minMatch+15, len(src)-pos)
+	if maxLen < minMatch {
+		return 0, 0
+	}
+
+	hash := matchHash(src, pos, minMatch)
+	candidate := int(finder.head[hash]) - 1
+	bestLen := 0
+	bestOff := 0
+
+	for candidate >= 0 {
+		offset := pos - candidate
+		if offset > limit || offset > WindowSize {
+			break
+		}
+		candidateMaxLen := min(maxLen, offset)
+		if candidateMaxLen <= bestLen {
+			candidate = int(finder.chain[candidate&windowMask]) - 1
+			continue
+		}
+
+		if bestLen == 0 || src[candidate+bestLen] == src[pos+bestLen] {
+			length := matchLength(src[candidate:], src[pos:], candidateMaxLen)
+			if length > bestLen {
+				bestLen = length
+				bestOff = offset
+				if bestLen == maxLen {
+					break
+				}
+			}
+		}
+
+		candidate = int(finder.chain[candidate&windowMask]) - 1
+	}
+
+	return bestLen, bestOff
+}
+
+// insertRange indexes consecutive source positions consumed by one token.
+func (finder *matchFinder) insertRange(src []byte, pos, length, minMatch int) {
+	for end := pos + length; pos < end; pos++ {
+		finder.insert(src, pos, minMatch)
+	}
+}
+
+// insert adds one source position to its hash chain.
+func (finder *matchFinder) insert(src []byte, pos, minMatch int) {
+	if len(src)-pos < minMatch {
+		return
+	}
+
+	hash := matchHash(src, pos, minMatch)
+	finder.chain[pos&windowMask] = finder.head[hash]
+	finder.head[hash] = int32(pos + 1) // #nosec G115 -- source length is checked before match finding
+}
+
+// matchHash returns the hash bucket for the minimum match prefix at pos.
+func matchHash(src []byte, pos, minMatch int) int {
+	hash := uint32(src[pos])<<8 | uint32(src[pos+1])
+	if minMatch > MinMatch2 {
+		hash = hash*0x1e35a7bd ^ uint32(src[pos+2])
+	}
+	return int(hash & matchHashMask)
+}
+
+// matchLength returns the common prefix length capped at maxLen.
+func matchLength(left, right []byte, maxLen int) int {
+	length := 0
+	for length < maxLen && left[length] == right[length] {
+		length++
+	}
+	return length
+}
+
+// matchFinderInputTooLarge reports whether absolute int32 positions would overflow.
+func matchFinderInputTooLarge(size int) bool {
+	return int64(size) > math.MaxInt32
 }

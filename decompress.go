@@ -108,6 +108,7 @@ func DecompressUntilEOF(r io.Reader, nextOutLen func() (int, bool), opts *Option
 	return blocks, countingReader.count, nil
 }
 
+// newCountingByteReader wraps r as an io.ByteReader and tracks consumed bytes.
 func newCountingByteReader(r io.Reader) (*countingByteReader, error) {
 	if r == nil {
 		return nil, ErrNilReader

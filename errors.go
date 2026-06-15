@@ -26,4 +26,6 @@ var (
 	ErrNegativeOutLen = errors.New("output length must be non-negative")
 	// ErrEmptyInput indicates that the provided compressed input is empty.
 	ErrEmptyInput = errors.New("input is empty")
+	// ErrInputTooLarge indicates that input exceeds the match finder's supported size.
+	ErrInputTooLarge = errors.New("input is too large")
 )
