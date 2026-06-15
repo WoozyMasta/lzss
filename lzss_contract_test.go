@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 	"math"
 	"math/rand"
 	"strconv"
@@ -157,6 +158,30 @@ func TestCompressToWriterMatchesCompress(t *testing.T) {
 	}
 }
 
+func TestCompressToWriterHandlesShortReads(t *testing.T) {
+	input := bytes.Repeat([]byte("short read stream payload"), 256)
+	want, err := Compress(input, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got bytes.Buffer
+	consumed, written, err := CompressToWriter(&got, &maxChunkReader{data: input, size: 1}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumed != int64(len(input)) || written != int64(len(want)) || !bytes.Equal(got.Bytes(), want) {
+		t.Fatalf("consumed=%d written=%d wantWritten=%d equal=%t", consumed, written, len(want), bytes.Equal(got.Bytes(), want))
+	}
+}
+
+func TestCompressToWriterRejectsReaderNoProgress(t *testing.T) {
+	_, _, err := CompressToWriter(io.Discard, noProgressReader{}, nil)
+	if !errors.Is(err, io.ErrNoProgress) {
+		t.Fatalf("want io.ErrNoProgress, got %v", err)
+	}
+}
+
 func TestCompressSearchLimitBoundary(t *testing.T) {
 	block := make([]byte, 3072)
 	_, _ = rand.New(rand.NewSource(2)).Read(block)
@@ -274,6 +299,32 @@ type errorWriter struct {
 
 func (writer errorWriter) Write([]byte) (int, error) {
 	return 0, writer.err
+}
+
+// maxChunkReader limits each read to size bytes.
+type maxChunkReader struct {
+	data []byte
+	pos  int
+	size int
+}
+
+// Read copies at most the configured chunk size.
+func (reader *maxChunkReader) Read(p []byte) (int, error) {
+	if reader.pos >= len(reader.data) {
+		return 0, io.EOF
+	}
+
+	n := copy(p[:min(len(p), reader.size)], reader.data[reader.pos:])
+	reader.pos += n
+	return n, nil
+}
+
+// noProgressReader returns no bytes and no error.
+type noProgressReader struct{}
+
+// Read returns no progress.
+func (noProgressReader) Read([]byte) (int, error) {
+	return 0, nil
 }
 
 // appendChecksum appends the checksum for output to an encoded payload.

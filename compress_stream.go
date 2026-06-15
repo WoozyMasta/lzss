@@ -44,9 +44,21 @@ func (writer *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// readByte reads one byte from source.
-// It returns (0, false, nil) on EOF.
-func (source *compressByteSource) readByte() (byte, bool, error) {
+// read copies one buffered source span into p.
+func (source *compressByteSource) read(p []byte) (int, error) {
+	if err := source.refill(); err != nil {
+		return 0, err
+	}
+
+	n := copy(p, source.buf[source.pos:source.n])
+	source.pos += n
+	source.count += int64(n)
+
+	return n, nil
+}
+
+// readByte reads one buffered source byte.
+func (source *compressByteSource) readByte() (byte, error) {
 	if source.pos >= source.n {
 		n, err := source.base.Read(source.buf)
 		switch {
@@ -56,20 +68,43 @@ func (source *compressByteSource) readByte() (byte, bool, error) {
 
 		case err != nil:
 			if errors.Is(err, io.EOF) {
-				return 0, false, nil
+				return 0, io.EOF
 			}
-			return 0, false, err
+			return 0, err
 
 		default:
-			return 0, false, io.ErrNoProgress
+			return 0, io.ErrNoProgress
 		}
 	}
 
 	b := source.buf[source.pos]
 	source.pos++
 	source.count++
+	return b, nil
+}
 
-	return b, true, nil
+// refill reads the next source chunk when the internal buffer is empty.
+func (source *compressByteSource) refill() error {
+	if source.pos < source.n {
+		return nil
+	}
+
+	n, err := source.base.Read(source.buf)
+	switch {
+	case n > 0:
+		source.pos = 0
+		source.n = n
+		return nil
+
+	case err != nil:
+		if errors.Is(err, io.EOF) {
+			return io.EOF
+		}
+		return err
+
+	default:
+		return io.ErrNoProgress
+	}
 }
 
 // CompressToWriter compresses one stream from src into dst using bounded memory.
@@ -113,15 +148,16 @@ func CompressToWriter(dst io.Writer, src io.Reader, opts *CompressOptions) (int6
 	// fillLookahead reads until window reaches MaxMatch or source EOF.
 	fillLookahead := func() error {
 		for len(lookahead) < MaxMatch {
-			b, ok, readErr := source.readByte()
+			oldLen := len(lookahead)
+			lookahead = lookahead[:cap(lookahead)]
+			n, readErr := source.read(lookahead[oldLen:])
+			lookahead = lookahead[:oldLen+n]
+			if errors.Is(readErr, io.EOF) {
+				return nil
+			}
 			if readErr != nil {
 				return readErr
 			}
-			if !ok {
-				return nil
-			}
-
-			lookahead = append(lookahead, b)
 		}
 
 		return nil
@@ -234,16 +270,21 @@ func CompressToWriter(dst io.Writer, src io.Reader, opts *CompressOptions) (int6
 			}
 
 			advance(bestLen)
+			if err := fillLookahead(); err != nil {
+				return source.count, countingWriter.count, err
+			}
 		} else {
 			if err := emitLiteral(lookahead[0]); err != nil {
 				return source.count, countingWriter.count, err
 			}
 
 			advance(1)
-		}
-
-		if err := fillLookahead(); err != nil {
-			return source.count, countingWriter.count, err
+			b, readErr := source.readByte()
+			if readErr == nil {
+				lookahead = append(lookahead, b)
+			} else if !errors.Is(readErr, io.EOF) {
+				return source.count, countingWriter.count, readErr
+			}
 		}
 	}
 
