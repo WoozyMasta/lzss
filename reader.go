@@ -11,7 +11,7 @@ type countingByteReader struct {
 	base       io.ByteReader // The byte reader to read from.
 	baseReader io.Reader     // The reader used for exact span reads.
 	count      int64         // The number of bytes read.
-	spanBuf    [FlagBits]byte
+	scratch    [MaxMatch]byte
 }
 
 // Read reads p from the reader and increments the count.

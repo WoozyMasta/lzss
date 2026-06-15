@@ -140,13 +140,14 @@ func decompressToWriterFromByteReader(dst io.Writer, r *countingByteReader, outL
 		}
 
 		if flagByte == 0xff && outLen-produced >= FlagBits {
-			if err := r.readFull(r.spanBuf[:]); err != nil {
+			literals := r.scratch[:FlagBits]
+			if err := r.readFull(literals); err != nil {
 				if err == io.EOF || err == io.ErrUnexpectedEOF {
 					return ErrUnexpectedEOFBit
 				}
 				return err
 			}
-			if err := emitSpan(r.spanBuf[:]); err != nil {
+			if err := emitSpan(literals); err != nil {
 				return err
 			}
 			continue
@@ -183,11 +184,46 @@ func decompressToWriterFromByteReader(dst io.Writer, r *countingByteReader, outL
 			offset := int(pointer&0x00FF) + (int(pointer&0xF000) >> 4)
 			length := int((pointer&0x0F00)>>8) + minMatch
 
-			for i := 0; i < length && produced < outLen; i++ {
+			need := min(length, outLen-produced)
+			if offset == 0 {
+				match := r.scratch[:need]
+				clear(match)
+				if err := emitSpan(match); err != nil {
+					return err
+				}
+				continue
+			}
+
+			match := r.scratch[:need]
+			fillerLen := min(max(offset-produced, 0), need)
+			for i := range fillerLen {
+				match[i] = Filler
+			}
+			if fillerLen > 0 {
+				if err := emitSpan(match[:fillerLen]); err != nil {
+					return err
+				}
+				need -= fillerLen
+			}
+			if need == 0 {
+				continue
+			}
+			match = match[:need]
+
+			if offset >= need {
+				sourcePos := (windowPos - offset) & windowMask
+				firstLen := min(need, WindowSize-sourcePos)
+				copy(match, window[sourcePos:sourcePos+firstLen])
+				copy(match[firstLen:], window[:need-firstLen])
+				if err := emitSpan(match); err != nil {
+					return err
+				}
+				continue
+			}
+
+			for i := 0; i < need; i++ {
 				var b byte
 				switch {
-				case offset == 0:
-					b = 0
 				case produced < offset:
 					b = Filler
 				default:

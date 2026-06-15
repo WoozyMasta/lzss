@@ -25,6 +25,7 @@ func TestDecodeGoldenVectors(t *testing.T) {
 		{name: "non-overlap-backref", payload: []byte{0x07, 'A', 'B', 'C', 3, 0}, want: []byte("ABCABC")},
 		{name: "overlap-backref", payload: []byte{0x01, 'A', 1, 15}, want: bytes.Repeat([]byte("A"), 19)},
 		{name: "filler-before-output", payload: []byte{0x00, 4, 0}, want: bytes.Repeat([]byte{Filler}, 3)},
+		{name: "filler-then-backref", payload: []byte{0x00, 1, 15}, want: bytes.Repeat([]byte{Filler}, 2)},
 		{name: "offset-zero", payload: []byte{0x00, 0, 0}, want: make([]byte, 3)},
 		{name: "final-match-is-capped", payload: []byte{0x01, 'A', 1, 15}, want: bytes.Repeat([]byte("A"), 5)},
 	}
@@ -333,6 +334,30 @@ func TestDecompressToWriterStopsAtBlockBoundary(t *testing.T) {
 	}
 	if !bytes.Equal(remaining, second) {
 		t.Fatalf("remaining stream differs: got=%q want=%q", remaining, second)
+	}
+}
+
+func TestDecompressToWriterNonOverlapBackrefAcrossWindowWrap(t *testing.T) {
+	prefix := make([]byte, WindowSize-FlagBits)
+	for i := range prefix {
+		prefix[i] = byte(i)
+	}
+	encoded, err := Compress(prefix, &CompressOptions{SearchLimit: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded = encoded[:len(encoded)-4]
+	encoded = append(encoded, 0x00, 0xf8, 0xff)
+	want := append(append([]byte(nil), prefix...), prefix[:MaxMatch]...)
+	encoded = appendChecksum(encoded, want, ChecksumUnsigned)
+
+	var out bytes.Buffer
+	consumed, err := DecompressToWriter(&out, bytes.NewReader(encoded), len(want), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumed != int64(len(encoded)) || !bytes.Equal(out.Bytes(), want) {
+		t.Fatalf("consumed=%d encoded=%d equal=%t", consumed, len(encoded), bytes.Equal(out.Bytes(), want))
 	}
 }
 
