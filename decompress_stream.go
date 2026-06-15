@@ -57,22 +57,30 @@ func decompressToWriterFromByteReader(dst io.Writer, r *countingByteReader, outL
 	produced := 0
 	writeBuf := make([]byte, 0, streamWriteBufferSize)
 
-	addChecksum := func(b byte) {
-		if signed {
+	var (
+		addChecksum     func(byte)
+		addChecksumSpan func([]byte)
+	)
+	switch {
+	case !opts.VerifyChecksum:
+		addChecksum = func(byte) {}
+		addChecksumSpan = func([]byte) {}
+
+	case signed:
+		addChecksum = func(b byte) {
 			calcCrc += signedByteAsInt32(b)
-			return
 		}
-
-		calcCrc += int32(b)
-	}
-
-	addChecksumSpan := func(data []byte) {
-		if signed {
+		addChecksumSpan = func(data []byte) {
 			calcCrc += sumSignedI32(data)
-			return
 		}
 
-		calcCrc += sumUnsigned(data)
+	default:
+		addChecksum = func(b byte) {
+			calcCrc += int32(b)
+		}
+		addChecksumSpan = func(data []byte) {
+			calcCrc += sumUnsigned(data)
+		}
 	}
 
 	emitByte := func(b byte) error {

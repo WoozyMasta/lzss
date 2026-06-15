@@ -266,6 +266,28 @@ func TestDecompressBlockLenientModesIgnoreChecksum(t *testing.T) {
 	}
 }
 
+func TestDecompressToWriterLenientModesIgnoreChecksum(t *testing.T) {
+	raw := bytes.Repeat([]byte{0x00, 0x7f, 0x80, 0xff}, 128)
+
+	for _, checksum := range []ChecksumMode{ChecksumUnsigned, ChecksumSigned} {
+		encoded, err := Compress(raw, &CompressOptions{Checksum: checksum, SearchLimit: 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded[len(encoded)-1] ^= 0xff
+
+		var out bytes.Buffer
+		opts := &Options{Checksum: checksum, VerifyChecksum: false}
+		consumed, err := DecompressToWriter(&out, bytes.NewReader(encoded), len(raw), opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if consumed != int64(len(encoded)) || !bytes.Equal(out.Bytes(), raw) {
+			t.Fatalf("lenient writer decode mismatch: consumed=%d encoded=%d", consumed, len(encoded))
+		}
+	}
+}
+
 func TestDecompressBlockTruncatedLiteralRun(t *testing.T) {
 	_, consumed, err := DecompressBlock([]byte{0xff, 1, 2, 3, 4}, 8, DefaultOptions())
 	if !errors.Is(err, ErrUnexpectedEOFBit) {
