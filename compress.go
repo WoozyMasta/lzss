@@ -227,9 +227,14 @@ func (finder *matchFinder) insert(src []byte, pos, minMatch int) {
 
 // matchHash returns the hash bucket for the minimum match prefix at pos.
 func matchHash(src []byte, pos, minMatch int) int {
-	hash := uint32(src[pos])<<8 | uint32(src[pos+1])
+	return matchHashPrefix(src[pos:], minMatch)
+}
+
+// matchHashPrefix returns the hash bucket for a minimum match prefix.
+func matchHashPrefix(prefix []byte, minMatch int) int {
+	hash := uint32(prefix[0])<<8 | uint32(prefix[1])
 	if minMatch > MinMatch2 {
-		hash = hash*0x1e35a7bd ^ uint32(src[pos+2])
+		hash = hash*0x1e35a7bd ^ uint32(prefix[2])
 	}
 	return int(hash & matchHashMask)
 }

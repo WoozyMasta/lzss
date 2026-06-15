@@ -30,6 +30,12 @@ type compressByteSource struct {
 	count int64
 }
 
+// streamMatchFinder indexes bounded stream history by short-prefix hash.
+type streamMatchFinder struct {
+	head  [matchHashSize]int64
+	chain [WindowSize]int64
+}
+
 // Write writes p to base writer and increments the byte counter.
 func (writer *countingWriter) Write(p []byte) (int, error) {
 	n, err := writer.base.Write(p)
@@ -130,7 +136,8 @@ func CompressToWriter(dst io.Writer, src io.Reader, opts *CompressOptions) (int6
 
 	history := make([]byte, WindowSize)
 	historyPos := 0
-	historyLen := 0
+	streamPos := int64(0)
+	finder := new(streamMatchFinder)
 
 	// advance commits n bytes from lookahead into history and checksum.
 	advance := func(n int) {
@@ -140,63 +147,17 @@ func CompressToWriter(dst io.Writer, src io.Reader, opts *CompressOptions) (int6
 
 			history[historyPos] = b
 			historyPos = (historyPos + 1) & windowMask
-			if historyLen < WindowSize {
-				historyLen++
-			}
 		}
 
+		finder.insertRange(lookahead, streamPos, n, minMatch)
+		streamPos += int64(n)
 		copy(lookahead, lookahead[n:])
 		lookahead = lookahead[:len(lookahead)-n]
 	}
 
 	// findBestMatch finds longest previous match for current lookahead.
 	findBestMatch := func() (int, int) {
-		if searchLimit <= 0 {
-			return 0, 0
-		}
-
-		bestLen := 0
-		bestOff := 0
-		maxCheck := min(historyLen, searchLimit)
-		lookaheadLen := len(lookahead)
-		if maxCheck < minMatch {
-			return 0, 0
-		}
-
-		for off := 1; off <= maxCheck; off++ {
-			maxLen := min(MaxMatch, lookaheadLen)
-			maxLen = min(maxLen, off)
-			if maxLen <= bestLen {
-				continue
-			}
-
-			if bestLen > 0 {
-				probeIdx := (historyPos - off + bestLen) & windowMask
-				if history[probeIdx] != lookahead[bestLen] {
-					continue
-				}
-			}
-
-			length := 0
-			for length < maxLen {
-				idx := (historyPos - off + length) & windowMask
-				if history[idx] != lookahead[length] {
-					break
-				}
-
-				length++
-			}
-
-			if length > bestLen {
-				bestLen = length
-				bestOff = off
-				if bestLen == MaxMatch {
-					break
-				}
-			}
-		}
-
-		return bestLen, bestOff
+		return finder.find(history, historyPos, lookahead, streamPos, searchLimit, minMatch)
 	}
 
 	var (
@@ -297,4 +258,81 @@ func CompressToWriter(dst io.Writer, src io.Reader, opts *CompressOptions) (int6
 	}
 
 	return source.count, countingWriter.count, nil
+}
+
+// find returns the longest indexed stream match and its backward offset.
+func (finder *streamMatchFinder) find(
+	history []byte,
+	historyPos int,
+	lookahead []byte,
+	pos int64,
+	limit int,
+	minMatch int,
+) (int, int) {
+	maxLen := min(minMatch+15, len(lookahead))
+	if limit <= 0 || maxLen < minMatch {
+		return 0, 0
+	}
+
+	hash := matchHashPrefix(lookahead, minMatch)
+	candidate := finder.head[hash] - 1
+	bestLen := 0
+	bestOff := 0
+
+	for candidate >= 0 {
+		distance := pos - candidate
+		if distance > int64(limit) || distance > WindowSize {
+			break
+		}
+		offset := int(distance)
+		candidateMaxLen := min(maxLen, offset)
+		if candidateMaxLen <= bestLen {
+			candidate = finder.chain[int(candidate)&windowMask] - 1
+			continue
+		}
+
+		if bestLen == 0 || history[(historyPos-offset+bestLen)&windowMask] == lookahead[bestLen] {
+			length := streamMatchLength(history, (historyPos-offset)&windowMask, lookahead, candidateMaxLen)
+			if length > bestLen {
+				bestLen = length
+				bestOff = offset
+				if bestLen == maxLen {
+					break
+				}
+			}
+		}
+
+		candidate = finder.chain[int(candidate)&windowMask] - 1
+	}
+
+	return bestLen, bestOff
+}
+
+// insertRange indexes consecutive stream positions consumed by one token.
+func (finder *streamMatchFinder) insertRange(lookahead []byte, pos int64, length, minMatch int) {
+	for index := range length {
+		finder.insert(lookahead[index:], pos+int64(index), minMatch)
+	}
+}
+
+// insert adds one absolute stream position to its hash chain.
+func (finder *streamMatchFinder) insert(prefix []byte, pos int64, minMatch int) {
+	if len(prefix) < minMatch {
+		return
+	}
+
+	hash := matchHashPrefix(prefix, minMatch)
+	finder.chain[int(pos)&windowMask] = finder.head[hash]
+	finder.head[hash] = pos + 1
+}
+
+// streamMatchLength returns the common prefix length for stream history and lookahead.
+func streamMatchLength(history []byte, historyStart int, lookahead []byte, maxLen int) int {
+	firstLen := min(maxLen, len(history)-historyStart)
+	length := matchLength(history[historyStart:], lookahead, firstLen)
+	if length < firstLen || length == maxLen {
+		return length
+	}
+
+	return length + matchLength(history, lookahead[length:], maxLen-length)
 }

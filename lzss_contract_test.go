@@ -130,6 +130,33 @@ func TestCompressDeterministicOutput(t *testing.T) {
 	}
 }
 
+func TestCompressToWriterMatchesCompress(t *testing.T) {
+	for _, corpus := range benchmarkCorpora {
+		for _, minMatch := range []int{MinMatch2, MinMatchDefault} {
+			for _, searchLimit := range []int{0, 64, 2048, WindowSize} {
+				opts := &CompressOptions{
+					Checksum:       ChecksumSigned,
+					SearchLimit:    searchLimit,
+					MinMatchLength: minMatch,
+				}
+				want, err := Compress(corpus.data, opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				var got bytes.Buffer
+				_, _, err = CompressToWriter(&got, bytes.NewReader(corpus.data), opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(got.Bytes(), want) {
+					t.Fatalf("corpus=%s minMatch=%d searchLimit=%d: stream output differs", corpus.name, minMatch, searchLimit)
+				}
+			}
+		}
+	}
+}
+
 func TestCompressSearchLimitBoundary(t *testing.T) {
 	block := make([]byte, 3072)
 	_, _ = rand.New(rand.NewSource(2)).Read(block)
