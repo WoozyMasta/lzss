@@ -114,14 +114,20 @@ func newCountingByteReader(r io.Reader) (*countingByteReader, error) {
 		return nil, ErrNilReader
 	}
 
-	var byteReader io.ByteReader
+	var (
+		byteReader io.ByteReader
+		reader     io.Reader
+	)
 	if existing, ok := r.(io.ByteReader); ok {
 		byteReader = existing
+		reader = r
 	} else {
-		byteReader = bufio.NewReader(r)
+		buffered := bufio.NewReader(r)
+		byteReader = buffered
+		reader = buffered
 	}
 
-	return &countingByteReader{base: byteReader}, nil
+	return &countingByteReader{base: byteReader, baseReader: reader}, nil
 }
 
 // decompressFromByteReader decompresses from a byte reader.

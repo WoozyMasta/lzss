@@ -35,8 +35,8 @@ func DecompressToWriter(dst io.Writer, src io.Reader, outLen int, opts *Options)
 	return countingReader.count, nil
 }
 
-// decompressToWriterFromByteReader decompresses one LZSS block into writer from byte reader source.
-func decompressToWriterFromByteReader(dst io.Writer, r io.ByteReader, outLen int, opts *Options) error {
+// decompressToWriterFromByteReader decompresses one LZSS block into writer from counted source.
+func decompressToWriterFromByteReader(dst io.Writer, r *countingByteReader, outLen int, opts *Options) error {
 	if opts == nil {
 		opts = DefaultOptions()
 	}
@@ -66,9 +66,18 @@ func decompressToWriterFromByteReader(dst io.Writer, r io.ByteReader, outLen int
 		calcCrc += int32(b)
 	}
 
+	addChecksumSpan := func(data []byte) {
+		if signed {
+			calcCrc += sumSignedI32(data)
+			return
+		}
+
+		calcCrc += sumUnsigned(data)
+	}
+
 	emitByte := func(b byte) error {
 		window[windowPos] = b
-		windowPos = (windowPos + 1) % WindowSize
+		windowPos = (windowPos + 1) & windowMask
 		produced++
 		addChecksum(b)
 		writeBuf = append(writeBuf, b)
@@ -80,6 +89,24 @@ func decompressToWriterFromByteReader(dst io.Writer, r io.ByteReader, outLen int
 			writeBuf = writeBuf[:0]
 		}
 
+		return nil
+	}
+
+	emitSpan := func(data []byte) error {
+		firstLen := min(len(data), WindowSize-windowPos)
+		copy(window[windowPos:], data[:firstLen])
+		copy(window, data[firstLen:])
+		windowPos = (windowPos + len(data)) & windowMask
+		produced += len(data)
+		addChecksumSpan(data)
+
+		if len(writeBuf)+len(data) > cap(writeBuf) {
+			if _, err := dst.Write(writeBuf); err != nil {
+				return err
+			}
+			writeBuf = writeBuf[:0]
+		}
+		writeBuf = append(writeBuf, data...)
 		return nil
 	}
 
@@ -110,6 +137,19 @@ func decompressToWriterFromByteReader(dst io.Writer, r io.ByteReader, outLen int
 		flagByte, err := readByte(ErrUnexpectedEOF)
 		if err != nil {
 			return err
+		}
+
+		if flagByte == 0xff && outLen-produced >= FlagBits {
+			if err := r.readFull(r.spanBuf[:]); err != nil {
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					return ErrUnexpectedEOFBit
+				}
+				return err
+			}
+			if err := emitSpan(r.spanBuf[:]); err != nil {
+				return err
+			}
+			continue
 		}
 
 		for bit := range FlagBits {

@@ -292,6 +292,50 @@ func TestDecompressToWriterPropagatesWriterError(t *testing.T) {
 	}
 }
 
+func TestDecompressToWriterHandlesShortReads(t *testing.T) {
+	raw := bytes.Repeat([]byte{0x00, 0x7f, 0x80, 0xff}, 1024)
+	encoded, err := Compress(raw, &CompressOptions{SearchLimit: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	consumed, err := DecompressToWriter(&out, &maxChunkReader{data: encoded, size: 1}, len(raw), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumed != int64(len(encoded)) || !bytes.Equal(out.Bytes(), raw) {
+		t.Fatalf("consumed=%d encoded=%d equal=%t", consumed, len(encoded), bytes.Equal(out.Bytes(), raw))
+	}
+}
+
+func TestDecompressToWriterStopsAtBlockBoundary(t *testing.T) {
+	raw := bytes.Repeat([]byte("literal block boundary"), 128)
+	first, err := Compress(raw, &CompressOptions{SearchLimit: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := []byte("next block sentinel")
+	stream := bytes.NewReader(append(append([]byte(nil), first...), second...))
+
+	var out bytes.Buffer
+	consumed, err := DecompressToWriter(&out, stream, len(raw), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumed != int64(len(first)) || !bytes.Equal(out.Bytes(), raw) {
+		t.Fatalf("consumed=%d first=%d equal=%t", consumed, len(first), bytes.Equal(out.Bytes(), raw))
+	}
+
+	remaining, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(remaining, second) {
+		t.Fatalf("remaining stream differs: got=%q want=%q", remaining, second)
+	}
+}
+
 // errorWriter returns a configured error for every write.
 type errorWriter struct {
 	err error
