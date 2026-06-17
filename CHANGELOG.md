@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD024 -->
 # Changelog
 
 All notable changes to this project will be documented in this file.
@@ -12,6 +13,41 @@ and this project adheres to [Semantic Versioning][].
 ### Changed
 ### Removed
 -->
+
+## Unreleased
+
+### Added
+
+* `ErrInputTooLarge` for slice compression inputs that exceed
+  the internal match finder's supported size.
+
+### Changed
+
+* Greatly improved `Compress` performance by replacing full match scans
+  with bounded hash-chain search:
+  about 70% faster on text,
+  11% faster on repetitive input,
+  and about 99.7% faster on incompressible and long-distance inputs.
+* Improved `CompressToWriter` throughput while preserving bounded-memory stream
+  compression and decoded-output compatibility:
+  about 66% faster on text,
+  19% faster on repetitive input,
+  and about 99% faster on incompressible and long-distance inputs.
+* Improved `DecompressBlock` performance:
+  verified decode is about 26-52% faster on the benchmark corpora,
+  and `VerifyChecksum=false` is about 54-80% faster while still consuming
+  the trailing checksum.
+* Improved `DecompressFromReader` performance
+  by about 4-30% on most benchmark corpora.
+* Improved `DecompressToWriter` performance for literal-heavy and
+  backref-heavy inputs by decoding larger spans into the destination writer:
+  about 53-72% faster across the benchmark corpora,
+  with the largest gains on incompressible and long-distance inputs.
+* Improved `DecompressToWriter` performance when `VerifyChecksum=false`
+  by skipping checksum arithmetic while still consuming the trailing checksum.
+* Overall benchmark geomean improved by about 77% in elapsed time.
+* Compressor output may differ from previous versions,
+  but decompressed data remains compatible.
 
 ## [0.1.6][] - 2026-02-21
 

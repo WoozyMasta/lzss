@@ -35,8 +35,8 @@ func DecompressToWriter(dst io.Writer, src io.Reader, outLen int, opts *Options)
 	return countingReader.count, nil
 }
 
-// decompressToWriterFromByteReader decompresses one LZSS block into writer from byte reader source.
-func decompressToWriterFromByteReader(dst io.Writer, r io.ByteReader, outLen int, opts *Options) error {
+// decompressToWriterFromByteReader decompresses one LZSS block into writer from counted source.
+func decompressToWriterFromByteReader(dst io.Writer, r *countingByteReader, outLen int, opts *Options) error {
 	if opts == nil {
 		opts = DefaultOptions()
 	}
@@ -57,18 +57,35 @@ func decompressToWriterFromByteReader(dst io.Writer, r io.ByteReader, outLen int
 	produced := 0
 	writeBuf := make([]byte, 0, streamWriteBufferSize)
 
-	addChecksum := func(b byte) {
-		if signed {
+	var (
+		addChecksum     func(byte)
+		addChecksumSpan func([]byte)
+	)
+	switch {
+	case !opts.VerifyChecksum:
+		addChecksum = func(byte) {}
+		addChecksumSpan = func([]byte) {}
+
+	case signed:
+		addChecksum = func(b byte) {
 			calcCrc += signedByteAsInt32(b)
-			return
+		}
+		addChecksumSpan = func(data []byte) {
+			calcCrc += sumSignedI32(data)
 		}
 
-		calcCrc += int32(b)
+	default:
+		addChecksum = func(b byte) {
+			calcCrc += int32(b)
+		}
+		addChecksumSpan = func(data []byte) {
+			calcCrc += sumUnsigned(data)
+		}
 	}
 
 	emitByte := func(b byte) error {
 		window[windowPos] = b
-		windowPos = (windowPos + 1) % WindowSize
+		windowPos = (windowPos + 1) & windowMask
 		produced++
 		addChecksum(b)
 		writeBuf = append(writeBuf, b)
@@ -80,6 +97,24 @@ func decompressToWriterFromByteReader(dst io.Writer, r io.ByteReader, outLen int
 			writeBuf = writeBuf[:0]
 		}
 
+		return nil
+	}
+
+	emitSpan := func(data []byte) error {
+		firstLen := min(len(data), WindowSize-windowPos)
+		copy(window[windowPos:], data[:firstLen])
+		copy(window, data[firstLen:])
+		windowPos = (windowPos + len(data)) & windowMask
+		produced += len(data)
+		addChecksumSpan(data)
+
+		if len(writeBuf)+len(data) > cap(writeBuf) {
+			if _, err := dst.Write(writeBuf); err != nil {
+				return err
+			}
+			writeBuf = writeBuf[:0]
+		}
+		writeBuf = append(writeBuf, data...)
 		return nil
 	}
 
@@ -110,6 +145,20 @@ func decompressToWriterFromByteReader(dst io.Writer, r io.ByteReader, outLen int
 		flagByte, err := readByte(ErrUnexpectedEOF)
 		if err != nil {
 			return err
+		}
+
+		if flagByte == 0xff && outLen-produced >= FlagBits {
+			literals := r.scratch[:FlagBits]
+			if err := r.readFull(literals); err != nil {
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					return ErrUnexpectedEOFBit
+				}
+				return err
+			}
+			if err := emitSpan(literals); err != nil {
+				return err
+			}
+			continue
 		}
 
 		for bit := range FlagBits {
@@ -143,11 +192,46 @@ func decompressToWriterFromByteReader(dst io.Writer, r io.ByteReader, outLen int
 			offset := int(pointer&0x00FF) + (int(pointer&0xF000) >> 4)
 			length := int((pointer&0x0F00)>>8) + minMatch
 
-			for i := 0; i < length && produced < outLen; i++ {
+			need := min(length, outLen-produced)
+			if offset == 0 {
+				match := r.scratch[:need]
+				clear(match)
+				if err := emitSpan(match); err != nil {
+					return err
+				}
+				continue
+			}
+
+			match := r.scratch[:need]
+			fillerLen := min(max(offset-produced, 0), need)
+			for i := range fillerLen {
+				match[i] = Filler
+			}
+			if fillerLen > 0 {
+				if err := emitSpan(match[:fillerLen]); err != nil {
+					return err
+				}
+				need -= fillerLen
+			}
+			if need == 0 {
+				continue
+			}
+			match = match[:need]
+
+			if offset >= need {
+				sourcePos := (windowPos - offset) & windowMask
+				firstLen := min(need, WindowSize-sourcePos)
+				copy(match, window[sourcePos:sourcePos+firstLen])
+				copy(match[firstLen:], window[:need-firstLen])
+				if err := emitSpan(match); err != nil {
+					return err
+				}
+				continue
+			}
+
+			for i := 0; i < need; i++ {
 				var b byte
 				switch {
-				case offset == 0:
-					b = 0
 				case produced < offset:
 					b = Filler
 				default:

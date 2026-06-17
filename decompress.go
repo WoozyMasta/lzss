@@ -108,19 +108,26 @@ func DecompressUntilEOF(r io.Reader, nextOutLen func() (int, bool), opts *Option
 	return blocks, countingReader.count, nil
 }
 
+// newCountingByteReader wraps r as an io.ByteReader and tracks consumed bytes.
 func newCountingByteReader(r io.Reader) (*countingByteReader, error) {
 	if r == nil {
 		return nil, ErrNilReader
 	}
 
-	var byteReader io.ByteReader
+	var (
+		byteReader io.ByteReader
+		reader     io.Reader
+	)
 	if existing, ok := r.(io.ByteReader); ok {
 		byteReader = existing
+		reader = r
 	} else {
-		byteReader = bufio.NewReader(r)
+		buffered := bufio.NewReader(r)
+		byteReader = buffered
+		reader = buffered
 	}
 
-	return &countingByteReader{base: byteReader}, nil
+	return &countingByteReader{base: byteReader, baseReader: reader}, nil
 }
 
 // decompressFromByteReader decompresses from a byte reader.
@@ -307,17 +314,21 @@ func decompressFromSlice(src []byte, outLen int, opts *Options) ([]byte, int, er
 		minMatch = MinMatchDefault
 	}
 
-	if opts.Checksum == ChecksumSigned {
-		return decompressFromSliceSigned(src, outLen, minMatch, opts.VerifyChecksum)
+	if !opts.VerifyChecksum {
+		return decompressFromSliceNoChecksum(src, outLen, minMatch)
 	}
 
-	return decompressFromSliceUnsigned(src, outLen, minMatch, opts.VerifyChecksum)
+	if opts.Checksum == ChecksumSigned {
+		return decompressFromSliceSigned(src, outLen, minMatch)
+	}
+
+	return decompressFromSliceUnsigned(src, outLen, minMatch)
 }
 
 // decompressFromSliceUnsigned is the hot path for default unsigned checksum mode.
 //
 //nolint:dupl // Intentional specialization for hot loop performance.
-func decompressFromSliceUnsigned(src []byte, outLen, minMatch int, verifyChecksum bool) ([]byte, int, error) {
+func decompressFromSliceUnsigned(src []byte, outLen, minMatch int) ([]byte, int, error) {
 	var calcCrc uint32
 	out := make([]byte, outLen)
 	inPos := 0
@@ -331,6 +342,19 @@ func decompressFromSliceUnsigned(src []byte, outLen, minMatch int, verifyChecksu
 
 		flagByte := src[inPos]
 		inPos++
+
+		if flagByte == 0xff && outLen-pos >= FlagBits {
+			if len(src)-inPos < FlagBits {
+				return nil, inPos, ErrUnexpectedEOFBit
+			}
+
+			literals := src[inPos : inPos+FlagBits]
+			copy(out[pos:pos+FlagBits], literals)
+			calcCrc += sumUnsignedU32(literals)
+			inPos += FlagBits
+			pos += FlagBits
+			continue
+		}
 
 		// Iterate over flag bits for each output byte.
 		for bit := range FlagBits {
@@ -416,10 +440,8 @@ func decompressFromSliceUnsigned(src []byte, outLen, minMatch int, verifyChecksu
 	}
 	readCrc := binary.LittleEndian.Uint32(checksumBytes[:])
 
-	if verifyChecksum {
-		if calcCrc != readCrc {
-			return nil, inPos, fmt.Errorf("checksum mismatch (unsigned): got=0x%x expected=0x%x", calcCrc, readCrc)
-		}
+	if calcCrc != readCrc {
+		return nil, inPos, fmt.Errorf("checksum mismatch (unsigned): got=0x%x expected=0x%x", calcCrc, readCrc)
 	}
 
 	return out, inPos, nil
@@ -428,7 +450,7 @@ func decompressFromSliceUnsigned(src []byte, outLen, minMatch int, verifyChecksu
 // decompressFromSliceSigned is the hot path for signed checksum mode.
 //
 //nolint:dupl // Intentional specialization for hot loop performance.
-func decompressFromSliceSigned(src []byte, outLen, minMatch int, verifyChecksum bool) ([]byte, int, error) {
+func decompressFromSliceSigned(src []byte, outLen, minMatch int) ([]byte, int, error) {
 	var calcCrc int32
 	out := make([]byte, outLen)
 	inPos := 0
@@ -527,14 +549,99 @@ func decompressFromSliceSigned(src []byte, outLen, minMatch int, verifyChecksum 
 	}
 	readCrc := binary.LittleEndian.Uint32(checksumBytes[:])
 
-	if verifyChecksum {
-		// #nosec G115 -- intentional: compare stored uint32 as int32 for signed checksum
-		if calcCrc != int32(readCrc) {
-			return nil, inPos, fmt.Errorf("checksum mismatch (signed): got=0x%x expected=0x%x", uint32(calcCrc), readCrc)
-		}
+	// #nosec G115 -- intentional: compare stored uint32 as int32 for signed checksum
+	if calcCrc != int32(readCrc) {
+		return nil, inPos, fmt.Errorf("checksum mismatch (signed): got=0x%x expected=0x%x", uint32(calcCrc), readCrc)
 	}
 
 	return out, inPos, nil
+}
+
+// decompressFromSliceNoChecksum decodes without checksum arithmetic but still consumes the trailing checksum.
+func decompressFromSliceNoChecksum(src []byte, outLen, minMatch int) ([]byte, int, error) {
+	out := make([]byte, outLen)
+	inPos := 0
+	pos := 0
+
+	for pos < outLen {
+		if inPos >= len(src) {
+			return nil, inPos, ErrUnexpectedEOF
+		}
+
+		flagByte := src[inPos]
+		inPos++
+
+		if flagByte == 0xff && outLen-pos >= FlagBits {
+			if len(src)-inPos < FlagBits {
+				return nil, inPos, ErrUnexpectedEOFBit
+			}
+
+			copy(out[pos:pos+FlagBits], src[inPos:inPos+FlagBits])
+			inPos += FlagBits
+			pos += FlagBits
+			continue
+		}
+
+		for bit := range FlagBits {
+			if pos >= outLen {
+				break
+			}
+
+			if (flagByte>>bit)&1 == 1 {
+				if inPos >= len(src) {
+					return nil, inPos, ErrUnexpectedEOFBit
+				}
+
+				out[pos] = src[inPos]
+				inPos++
+				pos++
+				continue
+			}
+
+			if inPos+2 > len(src) {
+				return nil, inPos, ErrUnexpectedEOFBit
+			}
+
+			lo := int(src[inPos])
+			hi := int(src[inPos+1])
+			inPos += 2
+
+			offset := lo + ((hi & 0xF0) << 4)
+			need := (hi & 0x0F) + minMatch
+			rpos := pos - offset
+
+			if rpos < 0 {
+				fillCount := min(-rpos, need)
+				endFill := min(pos+fillCount, outLen)
+				for j := pos; j < endFill; j++ {
+					out[j] = Filler
+				}
+				pos += fillCount
+				need -= fillCount
+				rpos = 0
+			}
+
+			if need > 0 && pos < outLen {
+				if pos+need > outLen {
+					need = outLen - pos
+				}
+				if offset < need {
+					for k := 0; k < need; k++ {
+						out[pos+k] = out[rpos+k]
+					}
+				} else {
+					copy(out[pos:pos+need], out[rpos:rpos+need])
+				}
+				pos += need
+			}
+		}
+	}
+
+	if len(src)-inPos < 4 {
+		return nil, inPos, ErrInputTooShort
+	}
+
+	return out, inPos + 4, nil
 }
 
 // sumUnsignedU32 returns unsigned sum of data bytes modulo uint32.

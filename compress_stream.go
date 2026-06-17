@@ -13,8 +13,6 @@ import (
 const (
 	// compressReadBufferSize is internal source read chunk size for stream compressor.
 	compressReadBufferSize = 4 * 1024
-	// windowMask enables faster modulo for 4096-size ring buffer.
-	windowMask = WindowSize - 1
 )
 
 // countingWriter writes to base writer and tracks written byte count.
@@ -32,6 +30,12 @@ type compressByteSource struct {
 	count int64
 }
 
+// streamMatchFinder indexes bounded stream history by short-prefix hash.
+type streamMatchFinder struct {
+	head  [matchHashSize]int64
+	chain [WindowSize]int64
+}
+
 // Write writes p to base writer and increments the byte counter.
 func (writer *countingWriter) Write(p []byte) (int, error) {
 	n, err := writer.base.Write(p)
@@ -40,9 +44,21 @@ func (writer *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// readByte reads one byte from source.
-// It returns (0, false, nil) on EOF.
-func (source *compressByteSource) readByte() (byte, bool, error) {
+// read copies one buffered source span into p.
+func (source *compressByteSource) read(p []byte) (int, error) {
+	if err := source.refill(); err != nil {
+		return 0, err
+	}
+
+	n := copy(p, source.buf[source.pos:source.n])
+	source.pos += n
+	source.count += int64(n)
+
+	return n, nil
+}
+
+// readByte reads one buffered source byte.
+func (source *compressByteSource) readByte() (byte, error) {
 	if source.pos >= source.n {
 		n, err := source.base.Read(source.buf)
 		switch {
@@ -52,20 +68,43 @@ func (source *compressByteSource) readByte() (byte, bool, error) {
 
 		case err != nil:
 			if errors.Is(err, io.EOF) {
-				return 0, false, nil
+				return 0, io.EOF
 			}
-			return 0, false, err
+			return 0, err
 
 		default:
-			return 0, false, io.ErrNoProgress
+			return 0, io.ErrNoProgress
 		}
 	}
 
 	b := source.buf[source.pos]
 	source.pos++
 	source.count++
+	return b, nil
+}
 
-	return b, true, nil
+// refill reads the next source chunk when the internal buffer is empty.
+func (source *compressByteSource) refill() error {
+	if source.pos < source.n {
+		return nil
+	}
+
+	n, err := source.base.Read(source.buf)
+	switch {
+	case n > 0:
+		source.pos = 0
+		source.n = n
+		return nil
+
+	case err != nil:
+		if errors.Is(err, io.EOF) {
+			return io.EOF
+		}
+		return err
+
+	default:
+		return io.ErrNoProgress
+	}
 }
 
 // CompressToWriter compresses one stream from src into dst using bounded memory.
@@ -109,15 +148,16 @@ func CompressToWriter(dst io.Writer, src io.Reader, opts *CompressOptions) (int6
 	// fillLookahead reads until window reaches MaxMatch or source EOF.
 	fillLookahead := func() error {
 		for len(lookahead) < MaxMatch {
-			b, ok, readErr := source.readByte()
+			oldLen := len(lookahead)
+			lookahead = lookahead[:cap(lookahead)]
+			n, readErr := source.read(lookahead[oldLen:])
+			lookahead = lookahead[:oldLen+n]
+			if errors.Is(readErr, io.EOF) {
+				return nil
+			}
 			if readErr != nil {
 				return readErr
 			}
-			if !ok {
-				return nil
-			}
-
-			lookahead = append(lookahead, b)
 		}
 
 		return nil
@@ -132,7 +172,8 @@ func CompressToWriter(dst io.Writer, src io.Reader, opts *CompressOptions) (int6
 
 	history := make([]byte, WindowSize)
 	historyPos := 0
-	historyLen := 0
+	streamPos := int64(0)
+	finder := new(streamMatchFinder)
 
 	// advance commits n bytes from lookahead into history and checksum.
 	advance := func(n int) {
@@ -142,63 +183,17 @@ func CompressToWriter(dst io.Writer, src io.Reader, opts *CompressOptions) (int6
 
 			history[historyPos] = b
 			historyPos = (historyPos + 1) & windowMask
-			if historyLen < WindowSize {
-				historyLen++
-			}
 		}
 
+		finder.insertRange(lookahead, streamPos, n, minMatch)
+		streamPos += int64(n)
 		copy(lookahead, lookahead[n:])
 		lookahead = lookahead[:len(lookahead)-n]
 	}
 
 	// findBestMatch finds longest previous match for current lookahead.
 	findBestMatch := func() (int, int) {
-		if searchLimit <= 0 {
-			return 0, 0
-		}
-
-		bestLen := 0
-		bestOff := 0
-		maxCheck := min(historyLen, searchLimit)
-		lookaheadLen := len(lookahead)
-		if maxCheck < minMatch {
-			return 0, 0
-		}
-
-		for off := 1; off <= maxCheck; off++ {
-			maxLen := min(MaxMatch, lookaheadLen)
-			maxLen = min(maxLen, off)
-			if maxLen <= bestLen {
-				continue
-			}
-
-			if bestLen > 0 {
-				probeIdx := (historyPos - off + bestLen) & windowMask
-				if history[probeIdx] != lookahead[bestLen] {
-					continue
-				}
-			}
-
-			length := 0
-			for length < maxLen {
-				idx := (historyPos - off + length) & windowMask
-				if history[idx] != lookahead[length] {
-					break
-				}
-
-				length++
-			}
-
-			if length > bestLen {
-				bestLen = length
-				bestOff = off
-				if bestLen == MaxMatch {
-					break
-				}
-			}
-		}
-
-		return bestLen, bestOff
+		return finder.find(history, historyPos, lookahead, streamPos, searchLimit, minMatch)
 	}
 
 	var (
@@ -275,16 +270,21 @@ func CompressToWriter(dst io.Writer, src io.Reader, opts *CompressOptions) (int6
 			}
 
 			advance(bestLen)
+			if err := fillLookahead(); err != nil {
+				return source.count, countingWriter.count, err
+			}
 		} else {
 			if err := emitLiteral(lookahead[0]); err != nil {
 				return source.count, countingWriter.count, err
 			}
 
 			advance(1)
-		}
-
-		if err := fillLookahead(); err != nil {
-			return source.count, countingWriter.count, err
+			b, readErr := source.readByte()
+			if readErr == nil {
+				lookahead = append(lookahead, b)
+			} else if !errors.Is(readErr, io.EOF) {
+				return source.count, countingWriter.count, readErr
+			}
 		}
 	}
 
@@ -299,4 +299,81 @@ func CompressToWriter(dst io.Writer, src io.Reader, opts *CompressOptions) (int6
 	}
 
 	return source.count, countingWriter.count, nil
+}
+
+// find returns the longest indexed stream match and its backward offset.
+func (finder *streamMatchFinder) find(
+	history []byte,
+	historyPos int,
+	lookahead []byte,
+	pos int64,
+	limit int,
+	minMatch int,
+) (int, int) {
+	maxLen := min(minMatch+15, len(lookahead))
+	if limit <= 0 || maxLen < minMatch {
+		return 0, 0
+	}
+
+	hash := matchHashPrefix(lookahead, minMatch)
+	candidate := finder.head[hash] - 1
+	bestLen := 0
+	bestOff := 0
+
+	for candidate >= 0 {
+		distance := pos - candidate
+		if distance > int64(limit) || distance > WindowSize {
+			break
+		}
+		offset := int(distance)
+		candidateMaxLen := min(maxLen, offset)
+		if candidateMaxLen <= bestLen {
+			candidate = finder.chain[int(candidate)&windowMask] - 1
+			continue
+		}
+
+		if bestLen == 0 || history[(historyPos-offset+bestLen)&windowMask] == lookahead[bestLen] {
+			length := streamMatchLength(history, (historyPos-offset)&windowMask, lookahead, candidateMaxLen)
+			if length > bestLen {
+				bestLen = length
+				bestOff = offset
+				if bestLen == maxLen {
+					break
+				}
+			}
+		}
+
+		candidate = finder.chain[int(candidate)&windowMask] - 1
+	}
+
+	return bestLen, bestOff
+}
+
+// insertRange indexes consecutive stream positions consumed by one token.
+func (finder *streamMatchFinder) insertRange(lookahead []byte, pos int64, length, minMatch int) {
+	for index := range length {
+		finder.insert(lookahead[index:], pos+int64(index), minMatch)
+	}
+}
+
+// insert adds one absolute stream position to its hash chain.
+func (finder *streamMatchFinder) insert(prefix []byte, pos int64, minMatch int) {
+	if len(prefix) < minMatch {
+		return
+	}
+
+	hash := matchHashPrefix(prefix, minMatch)
+	finder.chain[int(pos)&windowMask] = finder.head[hash]
+	finder.head[hash] = pos + 1
+}
+
+// streamMatchLength returns the common prefix length for stream history and lookahead.
+func streamMatchLength(history []byte, historyStart int, lookahead []byte, maxLen int) int {
+	firstLen := min(maxLen, len(history)-historyStart)
+	length := matchLength(history[historyStart:], lookahead, firstLen)
+	if length < firstLen || length == maxLen {
+		return length
+	}
+
+	return length + matchLength(history, lookahead[length:], maxLen-length)
 }
