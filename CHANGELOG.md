@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning][].
 ### Removed
 -->
 
-## Unreleased
+## [0.2.0][] - 2026-06-17
 
 ### Added
 
@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning][].
 * Overall benchmark geomean improved by about 77% in elapsed time.
 * Compressor output may differ from previous versions,
   but decompressed data remains compatible.
+
+[0.2.0]: https://github.com/WoozyMasta/lzss/compare/v0.1.6...v0.2.0
 
 ## [0.1.6][] - 2026-02-21
 
