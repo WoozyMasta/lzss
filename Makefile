@@ -4,28 +4,14 @@ ALIGNER     ?= betteralign
 BENCHSTAT   ?= benchstat
 BENCH_COUNT ?= 6
 BENCH_REF   ?= bench_baseline.txt
+FUZZ_TIME   ?= 20s
 
-.PHONY: test test-race test-short bench bench-fast bench-reset verify vet check ci \
-	fmt fmt-check lint lint-fix align align-fix tidy tidy-check download \
-	tools tools-ci tool-golangci-lint tool-betteralign tool-benchstat \
-	release-notes
+.PHONY: check ci
 
-check: verify tidy fmt vet lint-fix align-fix test
+check: verify tidy fmt vet lint-fix align-fix test test-race fuzz
 ci: download tools-ci verify tidy-check fmt-check vet lint align test
 
-fmt:
-	gofmt -w .
-
-fmt-check:
-	@files=$$(gofmt -l .); \
-	if [ -n "$$files" ]; then \
-		echo "$$files" 1>&2; \
-		echo "gofmt: files need formatting" 1>&2; \
-		exit 1; \
-	fi
-
-vet:
-	$(GO) vet ./...
+.PHONY: test test-race
 
 test:
 	$(GO) test ./...
@@ -33,8 +19,7 @@ test:
 test-race:
 	$(GO) test -race ./...
 
-test-short:
-	$(GO) test -short ./...
+.PHONY: bench bench-fast bench-reset
 
 bench:
 	@tmp=$$(mktemp); \
@@ -52,21 +37,43 @@ bench-fast:
 bench-reset:
 	rm -f "$(BENCH_REF)"
 
+.PHONY: fuzz
+
+fuzz:
+	$(GO) test -run='^$$' -fuzz='^FuzzRoundTripAllPaths$$' -fuzztime=$(FUZZ_TIME) .
+	$(GO) test -run='^$$' -fuzz='^FuzzDecodePathParity$$' -fuzztime=$(FUZZ_TIME) .
+
+.PHONY: download verify vet tidy tidy-check fmt fmt-check lint lint-fix align align-fix
+
+download:
+	$(GO) mod download
+
 verify:
 	$(GO) mod verify
 
-tidy-check:
-	@$(GO) mod tidy
-	@git diff --stat --exit-code -- go.mod go.sum || ( \
-		echo "go mod tidy: repository is not tidy"; \
-		exit 1; \
-	)
+vet:
+	$(GO) vet ./...
 
 tidy:
 	$(GO) mod tidy
 
-download:
-	$(GO) mod download
+tidy-check:
+	@$(GO) mod tidy
+	@git diff --stat --exit-code -- go.mod go.sum internal/simd/asmgen/go.mod internal/simd/asmgen/go.sum || ( \
+		echo "go mod tidy: repository is not tidy"; \
+		exit 1; \
+	)
+
+fmt:
+	gofmt -w .
+
+fmt-check:
+	@files="$$(gofmt -l .)"; \
+	if [ -n "$$files" ]; then \
+		echo "$$files"; \
+		echo "gofmt: files need formatting"; \
+		exit 1; \
+	fi
 
 lint:
 	$(LINTER) run ./...
@@ -81,6 +88,8 @@ align-fix:
 	-$(ALIGNER) -apply ./...
 	$(ALIGNER) ./...
 
+.PHONY: tools tools-ci tool-golangci-lint tool-betteralign tool-benchstat
+
 tools: tool-golangci-lint tool-betteralign tool-benchstat
 tools-ci: tool-golangci-lint tool-betteralign
 
@@ -92,6 +101,8 @@ tool-betteralign:
 
 tool-benchstat:
 	$(GO) install golang.org/x/perf/cmd/benchstat@latest
+
+.PHONY: release-notes
 
 release-notes:
 	@awk '\
