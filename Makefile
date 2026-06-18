@@ -59,7 +59,7 @@ tidy:
 
 tidy-check:
 	@$(GO) mod tidy
-	@git diff --stat --exit-code -- go.mod go.sum internal/simd/asmgen/go.mod internal/simd/asmgen/go.sum || ( \
+	@git diff --stat --exit-code -- go.mod go.sum || ( \
 		echo "go mod tidy: repository is not tidy"; \
 		exit 1; \
 	)
